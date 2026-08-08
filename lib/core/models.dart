@@ -131,6 +131,23 @@ class ReadingLocation {
     'pageNumber': pageNumber,
     'normalizedRect': normalizedRect,
   };
+
+  factory ReadingLocation.fromJson(Map<String, Object?> json) {
+    final kind = ReadingLocationKind.values.byName(json['kind']! as String);
+    if (kind == ReadingLocationKind.pdfRegion) {
+      return ReadingLocation.pdf(
+        pageNumber: json['pageNumber']! as int,
+        normalizedRect: (json['normalizedRect']! as List<Object?>)
+            .map((value) => (value! as num).toDouble())
+            .toList(),
+      );
+    }
+    return ReadingLocation.text(
+      chapterIndex: json['chapterIndex']! as int,
+      startOffset: json['startOffset']! as int,
+      endOffset: json['endOffset']! as int,
+    );
+  }
 }
 
 class Highlight {
@@ -149,6 +166,65 @@ class Highlight {
   final ReadingLocation location;
   final DateTime createdAt;
   final String? note;
+
+  Highlight copyWith({String? note}) => Highlight(
+    id: id,
+    bookId: bookId,
+    excerpt: excerpt,
+    location: location,
+    createdAt: createdAt,
+    note: note ?? this.note,
+  );
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'bookId': bookId,
+    'excerpt': excerpt,
+    'location': location.toJson(),
+    'createdAt': createdAt.toIso8601String(),
+    'note': note,
+  };
+
+  factory Highlight.fromJson(Map<String, Object?> json) => Highlight(
+    id: json['id']! as String,
+    bookId: json['bookId']! as String,
+    excerpt: json['excerpt']! as String,
+    location: ReadingLocation.fromJson(
+      (json['location']! as Map).cast<String, Object?>(),
+    ),
+    createdAt: DateTime.parse(json['createdAt']! as String),
+    note: json['note'] as String?,
+  );
+}
+
+class Note {
+  const Note({
+    required this.id,
+    required this.bookId,
+    required this.content,
+    required this.location,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String bookId;
+  final String content;
+  final ReadingLocation location;
+  final DateTime createdAt;
+}
+
+class AudioProgress {
+  const AudioProgress({
+    required this.bookId,
+    required this.chapterIndex,
+    required this.characterOffset,
+    required this.speed,
+  });
+
+  final String bookId;
+  final int chapterIndex;
+  final int characterOffset;
+  final double speed;
 }
 
 class ReaderSettings {
@@ -197,3 +273,14 @@ String encodeBooks(List<Book> books) =>
 List<Book> decodeBooks(String source) => (jsonDecode(source) as List<Object?>)
     .map((e) => Book.fromJson((e! as Map).cast<String, Object?>()))
     .toList();
+
+String encodeHighlights(List<Highlight> highlights) =>
+    jsonEncode(highlights.map((highlight) => highlight.toJson()).toList());
+
+List<Highlight> decodeHighlights(String source) =>
+    (jsonDecode(source) as List<Object?>)
+        .map(
+          (value) =>
+              Highlight.fromJson((value! as Map).cast<String, Object?>()),
+        )
+        .toList();

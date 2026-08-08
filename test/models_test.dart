@@ -36,5 +36,32 @@ void main() {
     expect(text.kind, ReadingLocationKind.textOffset);
     expect(pdf.kind, ReadingLocationKind.pdfRegion);
     expect(pdf.toJson()['pageNumber'], 3);
+
+    final decodedText = ReadingLocation.fromJson(text.toJson());
+    final decodedPdf = ReadingLocation.fromJson(pdf.toJson());
+    expect(decodedText.startOffset, 10);
+    expect(decodedPdf.normalizedRect, [.1, .2, .3, .4]);
+  });
+
+  test('highlight persistence keeps excerpt, location and note', () {
+    final highlight = Highlight(
+      id: 'highlight-1',
+      bookId: 'local-1',
+      excerpt: '一段正文',
+      location: const ReadingLocation.text(
+        chapterIndex: 1,
+        startOffset: 3,
+        endOffset: 7,
+      ),
+      createdAt: DateTime.utc(2026, 8, 3),
+      note: '我的笔记',
+    );
+
+    final decoded = decodeHighlights(encodeHighlights([highlight])).single;
+
+    expect(decoded.bookId, 'local-1');
+    expect(decoded.excerpt, '一段正文');
+    expect(decoded.location.chapterIndex, 1);
+    expect(decoded.note, '我的笔记');
   });
 }

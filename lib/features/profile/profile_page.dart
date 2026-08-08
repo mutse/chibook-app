@@ -123,7 +123,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               _SettingTile(
                 icon: Icons.edit_note,
                 title: '我的笔记与划线',
-                onTap: () => _message(context, '暂无新增笔记'),
+                value: state.highlights.isEmpty
+                    ? null
+                    : '${state.highlights.length}',
+                onTap: () => _showHighlights(context, ref),
               ),
               _SettingTile(
                 icon: Icons.history,
@@ -294,3 +297,74 @@ class _ThemeDot extends StatelessWidget {
 void _message(BuildContext context, String message) => ScaffoldMessenger.of(
   context,
 ).showSnackBar(SnackBar(content: Text(message)));
+
+Future<void> _showHighlights(BuildContext context, WidgetRef ref) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (context) => Consumer(
+      builder: (context, ref, _) {
+        final state = ref.watch(appControllerProvider);
+        final highlights = state.highlights;
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * .72,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  child: Text(
+                    '我的笔记与划线',
+                    style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: highlights.isEmpty
+                      ? const Center(child: Text('还没有划线或笔记'))
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: highlights.length,
+                          separatorBuilder: (_, _) => const Divider(height: 24),
+                          itemBuilder: (_, index) {
+                            final item = highlights[index];
+                            final books = state.books.where(
+                              (book) => book.id == item.bookId,
+                            );
+                            final title = books.isEmpty
+                                ? '已删除书籍'
+                                : books.first.title;
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(
+                                '“${item.excerpt}”',
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                item.note == null
+                                    ? title
+                                    : '$title\n笔记：${item.note}',
+                              ),
+                              isThreeLine: item.note != null,
+                              trailing: IconButton(
+                                tooltip: '删除',
+                                onPressed: () => ref
+                                    .read(appControllerProvider.notifier)
+                                    .removeHighlight(item.id),
+                                icon: const Icon(Icons.delete_outline),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}

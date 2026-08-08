@@ -104,7 +104,9 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                       );
                 },
                 itemBuilder: (_, index) => _ChapterPage(
+                  bookId: widget.book.id,
                   chapter: widget.book.chapters[index],
+                  chapterIndex: index,
                   settings: settings,
                   color: foreground,
                   page: index + 1,
@@ -112,6 +114,16 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                 ),
               ),
             ),
+            if (settings.brightness < 1)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: ColoredBox(
+                    color: Colors.black.withValues(
+                      alpha: (1 - settings.brightness) * .62,
+                    ),
+                  ),
+                ),
+              ),
             _ReaderTopBar(
               visible: _chrome,
               title: widget.book.chapters[_chapter].title,
@@ -183,13 +195,17 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
 
 class _ChapterPage extends StatelessWidget {
   const _ChapterPage({
+    required this.bookId,
     required this.chapter,
+    required this.chapterIndex,
     required this.settings,
     required this.color,
     required this.page,
     required this.count,
   });
+  final String bookId;
   final Chapter chapter;
+  final int chapterIndex;
   final ReaderSettings settings;
   final Color color;
   final int page;
@@ -214,22 +230,59 @@ class _ChapterPage extends StatelessWidget {
           child: SingleChildScrollView(
             child: SelectableText(
               chapter.content,
-              contextMenuBuilder: (context, state) =>
-                  AdaptiveTextSelectionToolbar.buttonItems(
-                    anchors: state.contextMenuAnchors,
-                    buttonItems: [
-                      ...state.contextMenuButtonItems,
-                      ContextMenuButtonItem(
-                        label: '划线',
-                        onPressed: () {
-                          state.hideToolbar();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已加入我的划线')),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+              contextMenuBuilder: (context, editableState) {
+                final selection = editableState.textEditingValue.selection;
+                Future<void> save({required bool withNote}) async {
+                  if (!selection.isValid || selection.isCollapsed) return;
+                  final start = selection.start.clamp(
+                    0,
+                    chapter.content.length,
+                  );
+                  final end = selection.end.clamp(
+                    start,
+                    chapter.content.length,
+                  );
+                  final excerpt = chapter.content.substring(start, end);
+                  String? note;
+                  if (withNote) {
+                    note = await _requestNote(context);
+                    if (note == null || !context.mounted) return;
+                  }
+                  await ProviderScope.containerOf(context)
+                      .read(appControllerProvider.notifier)
+                      .addHighlight(
+                        bookId: bookId,
+                        excerpt: excerpt,
+                        location: ReadingLocation.text(
+                          chapterIndex: chapterIndex,
+                          startOffset: start,
+                          endOffset: end,
+                        ),
+                        note: note,
+                      );
+                  editableState.hideToolbar();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(withNote ? '笔记已保存' : '划线已保存')),
+                    );
+                  }
+                }
+
+                return AdaptiveTextSelectionToolbar.buttonItems(
+                  anchors: editableState.contextMenuAnchors,
+                  buttonItems: [
+                    ...editableState.contextMenuButtonItems,
+                    ContextMenuButtonItem(
+                      label: '划线',
+                      onPressed: () => save(withNote: false),
+                    ),
+                    ContextMenuButtonItem(
+                      label: '笔记',
+                      onPressed: () => save(withNote: true),
+                    ),
+                  ],
+                );
+              },
               style: TextStyle(
                 color: color,
                 fontSize: settings.fontSize,
@@ -408,6 +461,24 @@ class _ReaderSettingsSheet extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 8),
+            const Text('亮度', style: TextStyle(fontWeight: FontWeight.w700)),
+            Row(
+              children: [
+                const Icon(Icons.brightness_low_outlined, size: 18),
+                Expanded(
+                  child: Slider(
+                    value: settings.brightness,
+                    min: .35,
+                    max: 1,
+                    onChanged: (value) => controller.setSettings(
+                      settings.copyWith(brightness: value),
+                    ),
+                  ),
+                ),
+                const Icon(Icons.brightness_high_outlined, size: 18),
+              ],
+            ),
+            const SizedBox(height: 8),
             const Text('行距', style: TextStyle(fontWeight: FontWeight.w700)),
             Slider(
               value: settings.lineHeight,
@@ -487,9 +558,50 @@ class _ThemeChoice extends StatelessWidget {
   }
 }
 
-class PdfReaderPage extends StatelessWidget {
+Future<String?> _requestNote(BuildContext context) async {
+  final controller = TextEditingController();
+  final result = await showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('添加笔记'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        minLines: 2,
+        maxLines: 5,
+        decoration: const InputDecoration(hintText: '写下此刻的想法…'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final value = controller.text.trim();
+            if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+          },
+          child: const Text('保存'),
+        ),
+      ],
+    ),
+  );
+  controller.dispose();
+  return result;
+}
+
+class PdfReaderPage extends ConsumerStatefulWidget {
   const PdfReaderPage({required this.book, super.key});
   final Book book;
+
+  @override
+  ConsumerState<PdfReaderPage> createState() => _PdfReaderPageState();
+}
+
+class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
+  int _pageCount = 1;
+
+  Book get book => widget.book;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -498,9 +610,15 @@ class PdfReaderPage extends StatelessWidget {
       actions: [
         IconButton(
           tooltip: '听书',
-          onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('PDF 听书需要可提取文本；扫描版 PDF 暂不支持。')),
-          ),
+          onPressed: () {
+            if (book.chapters.isNotEmpty) {
+              context.push('/player/${book.id}');
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('此 PDF 未提取到文本；扫描版 PDF 暂不支持听书。')),
+              );
+            }
+          },
           icon: const Icon(Icons.headphones_outlined),
         ),
       ],
@@ -509,7 +627,27 @@ class PdfReaderPage extends StatelessWidget {
         ? const Center(child: Text('PDF 文件路径不可用'))
         : Stack(
             children: [
-              PdfViewer.file(book.filePath!),
+              PdfViewer.file(
+                book.filePath!,
+                initialPageNumber: book.chapterIndex + 1,
+                params: PdfViewerParams(
+                  onViewerReady: (document, _) {
+                    if (mounted) {
+                      setState(() => _pageCount = document.pages.length);
+                    }
+                  },
+                  onPageChanged: (pageNumber) {
+                    if (pageNumber == null) return;
+                    ref
+                        .read(appControllerProvider.notifier)
+                        .updateProgress(
+                          book.id,
+                          pageNumber - 1,
+                          (pageNumber / _pageCount).clamp(0, 1),
+                        );
+                  },
+                ),
+              ),
               Positioned(
                 left: 14,
                 right: 14,

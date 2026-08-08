@@ -5,6 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:xml/xml.dart';
@@ -17,6 +18,7 @@ class BookRepository {
 
   static const _booksKey = 'erdu.books.v1';
   static const _settingsKey = 'erdu.reader.settings.v1';
+  static const _highlightsKey = 'erdu.highlights.v1';
   final SharedPreferencesAsync _preferences;
   final _uuid = const Uuid();
 
@@ -48,6 +50,19 @@ class BookRepository {
   Future<void> saveSettings(ReaderSettings settings) =>
       _preferences.setString(_settingsKey, jsonEncode(settings.toJson()));
 
+  Future<List<Highlight>> loadHighlights() async {
+    final stored = await _preferences.getString(_highlightsKey);
+    if (stored == null) return const [];
+    try {
+      return decodeHighlights(stored);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> saveHighlights(List<Highlight> highlights) =>
+      _preferences.setString(_highlightsKey, encodeHighlights(highlights));
+
   Future<Book?> importBook() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
@@ -71,13 +86,14 @@ class BookRepository {
     );
 
     if (extension == 'pdf') {
+      final chapters = await _extractPdfText(storedPath);
       return Book(
         id: id,
         title: name,
         author: '本地文档',
         format: BookFormat.pdf,
         coverColor: 0xFF6B655C,
-        chapters: const [],
+        chapters: chapters,
         filePath: storedPath,
       );
     }
@@ -97,6 +113,41 @@ class BookRepository {
       chapters: _splitText(text),
       filePath: storedPath,
     );
+  }
+
+  Future<void> deleteBookFile(Book book) async {
+    final path = book.filePath;
+    if (path == null) return;
+    final documents = await getApplicationDocumentsDirectory();
+    final libraryPath = '${documents.path}/library/';
+    if (!path.startsWith(libraryPath)) return;
+    final file = File(path);
+    if (await file.exists()) await file.delete();
+  }
+
+  Future<List<Chapter>> _extractPdfText(String path) async {
+    PdfDocument? document;
+    try {
+      document = await PdfDocument.openFile(path);
+      final chapters = <Chapter>[];
+      var hasText = false;
+      for (final page in document.pages) {
+        final rawText = await page.loadText();
+        final text =
+            rawText?.fullText
+                .replaceAll(RegExp(r'[ \t]+'), ' ')
+                .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+                .trim() ??
+            '';
+        hasText = hasText || text.isNotEmpty;
+        chapters.add(Chapter(title: '第 ${page.pageNumber} 页', content: text));
+      }
+      return hasText ? chapters : const [];
+    } catch (_) {
+      return const [];
+    } finally {
+      await document?.dispose();
+    }
   }
 
   Future<Book> _readEpub({
@@ -121,9 +172,6 @@ class BookRepository {
         .getAttribute('full-path');
     if (packagePath == null) throw const FormatException('EPUB 缺少 OPF 路径');
     final package = XmlDocument.parse(readEntry(packagePath));
-    final packageDir = packagePath.contains('/')
-        ? packagePath.substring(0, packagePath.lastIndexOf('/') + 1)
-        : '';
     String metadataValue(String name) => package.descendants
         .whereType<XmlElement>()
         .where((element) => element.localName == name)
@@ -143,9 +191,9 @@ class BookRepository {
     )) {
       final href = manifest[itemRef.getAttribute('idref')];
       if (href == null) continue;
-      final raw = readEntry(
-        '$packageDir${Uri.decodeComponent(href.split('#').first)}',
-      );
+      final packageUri = Uri(path: packagePath);
+      final resolvedPath = packageUri.resolve(href).path;
+      final raw = readEntry(Uri.decodeComponent(resolvedPath));
       if (raw.isEmpty) continue;
       final document = html_parser.parse(raw);
       final plain =

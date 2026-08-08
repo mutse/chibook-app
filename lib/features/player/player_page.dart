@@ -28,6 +28,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   int _start = 0;
   int _end = 0;
   Timer? _sleepTimer;
+  Timer? _progressSaveTimer;
   String? _timerLabel;
 
   Book? get _book {
@@ -61,6 +62,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             _start = event['start'] as int? ?? 0;
             _end = event['end'] as int? ?? 0;
           });
+          final chapterLength = book.chapters[_chapter].content.length;
+          final chapterFraction = chapterLength == 0
+              ? 0.0
+              : _end / chapterLength;
+          final overall = (_chapter + chapterFraction) / book.chapters.length;
+          _progressSaveTimer?.cancel();
+          _progressSaveTimer = Timer(const Duration(milliseconds: 800), () {
+            ref
+                .read(appControllerProvider.notifier)
+                .updateProgress(book.id, _chapter, overall.clamp(0, 1));
+          });
         }
         if (event['type'] == 'chapter') {
           final next = event['chapter'] as int? ?? _chapter;
@@ -80,6 +92,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   @override
   void dispose() {
     _sleepTimer?.cancel();
+    _progressSaveTimer?.cancel();
     _playbackSubscription?.cancel();
     _eventSubscription?.cancel();
     _wave.dispose();
@@ -198,7 +211,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                   inactiveTrackColor: Colors.white12,
                   thumbColor: const Color(0xFFF2C9A0),
                 ),
-                child: Slider(value: progress, onChanged: (_) {}),
+                child: Slider(
+                  value: progress,
+                  onChanged: (value) {
+                    final offset = (chapter.content.length * value).round();
+                    setState(() {
+                      _start = offset;
+                      _end = offset;
+                    });
+                  },
+                  onChangeEnd: (value) => ttsAudioHandler.seekToCharacter(
+                    (chapter.content.length * value).round(),
+                  ),
+                ),
               ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -232,7 +257,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                     ),
                   ),
                   IconButton(
-                    onPressed: () {},
+                    tooltip: '后退约 10 秒',
+                    onPressed: () => ttsAudioHandler.seekByCharacters(-40),
                     icon: const Icon(
                       Icons.replay_10_rounded,
                       color: Color(0xFFEDE7D8),
@@ -252,7 +278,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                     ),
                   ),
                   IconButton(
-                    onPressed: () {},
+                    tooltip: '前进约 10 秒',
+                    onPressed: () => ttsAudioHandler.seekByCharacters(40),
                     icon: const Icon(
                       Icons.forward_10_rounded,
                       color: Color(0xFFEDE7D8),

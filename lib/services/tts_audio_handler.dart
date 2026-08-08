@@ -28,6 +28,8 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   Book? _book;
   int _chapter = 0;
   double _speed = 1;
+  int _characterOffset = 0;
+  int _speechStartOffset = 0;
 
   Future<void> _initialize() async {
     await _tts.setLanguage('zh-CN');
@@ -46,10 +48,13 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       customEvent.add({'type': 'error', 'message': message});
     });
     _tts.setProgressHandler((text, start, end, word) {
+      final absoluteStart = _speechStartOffset + start;
+      final absoluteEnd = _speechStartOffset + end;
+      _characterOffset = absoluteEnd;
       customEvent.add({
         'type': 'progress',
-        'start': start,
-        'end': end,
+        'start': absoluteStart,
+        'end': absoluteEnd,
         'chapter': _chapter,
       });
     });
@@ -57,6 +62,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       final book = _book;
       if (book != null && _chapter < book.chapters.length - 1) {
         _chapter++;
+        _characterOffset = 0;
         _publishMediaItem();
         customEvent.add({'type': 'chapter', 'chapter': _chapter});
         await _speakCurrent();
@@ -71,6 +77,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     await _tts.stop();
     _book = book;
     _chapter = chapterIndex.clamp(0, book.chapters.length - 1);
+    _characterOffset = 0;
     _publishMediaItem();
     _publish(playing: false, state: AudioProcessingState.ready);
     customEvent.add({'type': 'chapter', 'chapter': _chapter});
@@ -107,11 +114,34 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> skipToPrevious() => _moveChapter(-1);
 
+  Future<void> seekByCharacters(int delta) async {
+    final book = _book;
+    if (book == null || book.chapters.isEmpty) return;
+    final length = book.chapters[_chapter].content.length;
+    await seekToCharacter((_characterOffset + delta).clamp(0, length));
+  }
+
+  Future<void> seekToCharacter(int offset) async {
+    final book = _book;
+    if (book == null || book.chapters.isEmpty) return;
+    final length = book.chapters[_chapter].content.length;
+    _characterOffset = offset.clamp(0, length);
+    await _tts.stop();
+    customEvent.add({
+      'type': 'progress',
+      'start': _characterOffset,
+      'end': _characterOffset,
+      'chapter': _chapter,
+    });
+    await _speakCurrent();
+  }
+
   Future<void> _moveChapter(int delta) async {
     final book = _book;
     if (book == null || book.chapters.isEmpty) return;
     await _tts.stop();
     _chapter = (_chapter + delta).clamp(0, book.chapters.length - 1);
+    _characterOffset = 0;
     _publishMediaItem();
     customEvent.add({'type': 'chapter', 'chapter': _chapter});
     await _speakCurrent();
@@ -122,7 +152,10 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     if (book == null || book.chapters.isEmpty) return;
     await _tts.setSpeechRate((_speed * .5).clamp(.1, 1.0));
     _publish(playing: true, state: AudioProcessingState.ready);
-    await _tts.speak(book.chapters[_chapter].content);
+    final content = book.chapters[_chapter].content;
+    if (_characterOffset >= content.length) _characterOffset = 0;
+    _speechStartOffset = _characterOffset;
+    await _tts.speak(content.substring(_characterOffset));
   }
 
   void _publishMediaItem() {

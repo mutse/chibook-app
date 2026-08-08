@@ -97,11 +97,21 @@ class ShelfPage extends ConsumerWidget {
       ),
     );
     if (proceed != true || !context.mounted) return;
-    final success = await ref.read(appControllerProvider.notifier).importBook();
-    if (context.mounted && success) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('书籍已导入到本地书架')));
+    try {
+      final success = await ref
+          .read(appControllerProvider.notifier)
+          .importBook();
+      if (context.mounted && success) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('书籍已导入到本地书架')));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('导入失败：$error')));
+      }
     }
   }
 }
@@ -157,7 +167,7 @@ class _GridBook extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) => GestureDetector(
     onTap: () => context.push('/reader/${book.id}'),
-    onLongPress: () => _bookMenu(context, ref, book),
+    onLongPress: () => _showMultiSelect(context, ref, book.id),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -226,6 +236,7 @@ class _BookList extends ConsumerWidget {
           onPressed: () => _bookMenu(context, ref, book),
         ),
         onTap: () => context.push('/reader/${book.id}'),
+        onLongPress: () => _showMultiSelect(context, ref, book.id),
       );
     },
   );
@@ -370,5 +381,143 @@ Future<void> _bookMenu(BuildContext context, WidgetRef ref, Book book) async {
   if (action == 'listen' && context.mounted) context.push('/player/${book.id}');
   if (action == 'delete') {
     await ref.read(appControllerProvider.notifier).removeBook(book.id);
+  }
+}
+
+Future<void> _showMultiSelect(
+  BuildContext context,
+  WidgetRef ref,
+  String initialId,
+) async {
+  final selected = <String>{initialId};
+  final books = ref.read(appControllerProvider).books;
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) => StatefulBuilder(
+      builder: (context, setModalState) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * .7,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 12, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '已选择 ${selected.length} 本',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => setModalState(() {
+                        if (selected.length == books.length) {
+                          selected.clear();
+                        } else {
+                          selected.addAll(books.map((book) => book.id));
+                        }
+                      }),
+                      child: Text(
+                        selected.length == books.length ? '取消全选' : '全选',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: books.length,
+                  itemBuilder: (_, index) {
+                    final book = books[index];
+                    return CheckboxListTile(
+                      value: selected.contains(book.id),
+                      title: Text(book.title),
+                      subtitle: Text(book.author),
+                      secondary: Icon(
+                        book.format == BookFormat.pdf
+                            ? Icons.picture_as_pdf_outlined
+                            : Icons.menu_book_outlined,
+                      ),
+                      onChanged: (checked) => setModalState(() {
+                        checked == true
+                            ? selected.add(book.id)
+                            : selected.remove(book.id);
+                      }),
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: selected.isEmpty
+                            ? null
+                            : () => Navigator.pop(sheetContext, 'pin'),
+                        icon: const Icon(Icons.push_pin_outlined),
+                        label: const Text('置顶'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.seal,
+                        ),
+                        onPressed: selected.isEmpty
+                            ? null
+                            : () => Navigator.pop(sheetContext, 'delete'),
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('删除'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  if (action == 'pin') {
+    for (final id in selected) {
+      final book = ref
+          .read(appControllerProvider)
+          .books
+          .firstWhere((item) => item.id == id);
+      if (!book.isPinned) {
+        await ref.read(appControllerProvider.notifier).togglePinned(id);
+      }
+    }
+  } else if (action == 'delete' && context.mounted) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('删除 ${selected.length} 本书？'),
+        content: const Text('书籍将从本地书架移除，相关划线也会一并删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(appControllerProvider.notifier).removeBooks(selected);
+    }
   }
 }

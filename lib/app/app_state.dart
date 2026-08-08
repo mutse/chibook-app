@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../core/models.dart';
 import '../data/book_repository.dart';
@@ -16,6 +17,7 @@ class AppState {
     this.initialized = false,
     this.isGrid = true,
     this.activeAudioBookId,
+    this.highlights = const [],
     this.recentSearches = const ['沈从文', '人间词话', '鲁迅', '瓦尔登湖'],
   });
 
@@ -24,6 +26,7 @@ class AppState {
   final bool initialized;
   final bool isGrid;
   final String? activeAudioBookId;
+  final List<Highlight> highlights;
   final List<String> recentSearches;
 
   AppState copyWith({
@@ -32,6 +35,7 @@ class AppState {
     bool? initialized,
     bool? isGrid,
     String? activeAudioBookId,
+    List<Highlight>? highlights,
     List<String>? recentSearches,
   }) => AppState(
     books: books ?? this.books,
@@ -39,11 +43,13 @@ class AppState {
     initialized: initialized ?? this.initialized,
     isGrid: isGrid ?? this.isGrid,
     activeAudioBookId: activeAudioBookId ?? this.activeAudioBookId,
+    highlights: highlights ?? this.highlights,
     recentSearches: recentSearches ?? this.recentSearches,
   );
 }
 
 class AppController extends Notifier<AppState> {
+  static const _uuid = Uuid();
   BookRepository get _repository => ref.read(bookRepositoryProvider);
 
   @override
@@ -56,10 +62,12 @@ class AppController extends Notifier<AppState> {
     final values = await Future.wait([
       _repository.loadBooks(),
       _repository.loadSettings(),
+      _repository.loadHighlights(),
     ]);
     state = state.copyWith(
       books: values[0] as List<Book>,
       settings: values[1] as ReaderSettings,
+      highlights: values[2] as List<Highlight>,
       initialized: true,
     );
   }
@@ -75,10 +83,33 @@ class AppController extends Notifier<AppState> {
   }
 
   Future<void> removeBook(String id) async {
+    final removed = state.books.where((book) => book.id == id).firstOrNull;
     state = state.copyWith(
       books: state.books.where((e) => e.id != id).toList(),
+      highlights: state.highlights
+          .where((highlight) => highlight.bookId != id)
+          .toList(),
     );
-    await _repository.saveBooks(state.books);
+    await Future.wait([
+      _repository.saveBooks(state.books),
+      _repository.saveHighlights(state.highlights),
+      if (removed != null) _repository.deleteBookFile(removed),
+    ]);
+  }
+
+  Future<void> removeBooks(Set<String> ids) async {
+    final removed = state.books.where((book) => ids.contains(book.id)).toList();
+    state = state.copyWith(
+      books: state.books.where((book) => !ids.contains(book.id)).toList(),
+      highlights: state.highlights
+          .where((highlight) => !ids.contains(highlight.bookId))
+          .toList(),
+    );
+    await Future.wait([
+      _repository.saveBooks(state.books),
+      _repository.saveHighlights(state.highlights),
+      ...removed.map(_repository.deleteBookFile),
+    ]);
   }
 
   Future<void> togglePinned(String id) async {
@@ -128,5 +159,30 @@ class AppController extends Notifier<AppState> {
         ...state.recentSearches.where((e) => e != value),
       ].take(6).toList(),
     );
+  }
+
+  Future<void> addHighlight({
+    required String bookId,
+    required String excerpt,
+    required ReadingLocation location,
+    String? note,
+  }) async {
+    final highlight = Highlight(
+      id: _uuid.v4(),
+      bookId: bookId,
+      excerpt: excerpt,
+      location: location,
+      createdAt: DateTime.now(),
+      note: note,
+    );
+    state = state.copyWith(highlights: [highlight, ...state.highlights]);
+    await _repository.saveHighlights(state.highlights);
+  }
+
+  Future<void> removeHighlight(String id) async {
+    state = state.copyWith(
+      highlights: state.highlights.where((item) => item.id != id).toList(),
+    );
+    await _repository.saveHighlights(state.highlights);
   }
 }
