@@ -55,52 +55,65 @@ class ShelfPage extends ConsumerWidget {
   }
 
   Future<void> _showImport(BuildContext context, WidgetRef ref) async {
-    final proceed = await showModalBottomSheet<bool>(
+    var selectedFormat = BookFormat.txt;
+    final format = await showModalBottomSheet<BookFormat>(
       context: context,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                '导入本地书籍',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-              ),
-              const SizedBox(height: 14),
-              const Row(
-                children: [
-                  Expanded(child: _FormatChip('TXT')),
-                  SizedBox(width: 8),
-                  Expanded(child: _FormatChip('EPUB')),
-                  SizedBox(width: 8),
-                  Expanded(child: _FormatChip('PDF')),
-                ],
-              ),
-              const SizedBox(height: 18),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('选择文件'),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'PDF 使用固定版式阅读，仅支持整体缩放；TXT 与 EPUB 支持字号和行距调整。',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: AppColors.graphite),
-              ),
-            ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '导入本地书籍',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: BookFormat.values
+                      .map(
+                        (value) => Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: _FormatChip(
+                              value.name.toUpperCase(),
+                              selected: value == selectedFormat,
+                              onTap: () =>
+                                  setModalState(() => selectedFormat = value),
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 18),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, selectedFormat),
+                  child: Text('选择 ${selectedFormat.name.toUpperCase()} 文件'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  selectedFormat == BookFormat.pdf
+                      ? 'PDF 使用固定版式阅读，仅支持整体缩放。'
+                      : 'TXT 与 EPUB 支持字号、行距和阅读主题调整。',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.graphite),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
-    if (proceed != true || !context.mounted) return;
+    if (format == null || !context.mounted) return;
     try {
       final success = await ref
           .read(appControllerProvider.notifier)
-          .importBook();
+          .importBook(format: format);
       if (context.mounted && success) {
         ScaffoldMessenger.of(
           context,
@@ -165,47 +178,72 @@ class _GridBook extends ConsumerWidget {
   final Book book;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => GestureDetector(
-    onTap: () => context.push('/reader/${book.id}'),
-    onLongPress: () => _showMultiSelect(context, ref, book.id),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Stack(
-            children: [
-              Positioned.fill(child: _BookCover(book: book)),
-              if (book.progress > 0)
+  Widget build(BuildContext context, WidgetRef ref) {
+    final listening = ref.watch(
+      appControllerProvider.select(
+        (state) => state.activeAudioBookId == book.id,
+      ),
+    );
+    return GestureDetector(
+      onTap: () => context.push('/reader/${book.id}'),
+      onLongPress: () => _showMultiSelect(context, ref, book.id),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(child: _BookCover(book: book)),
+                if (book.progress > 0)
+                  Positioned(
+                    right: 7,
+                    top: 7,
+                    child: _ProgressSeal(progress: book.progress),
+                  ),
+                if (book.isPinned)
+                  const Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: Icon(Icons.push_pin, color: Colors.white, size: 16),
+                  ),
                 Positioned(
-                  right: 7,
-                  top: 7,
-                  child: _ProgressSeal(progress: book.progress),
+                  left: 5,
+                  top: 5,
+                  child: IconButton.filled(
+                    tooltip: '书籍菜单',
+                    visualDensity: VisualDensity.compact,
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.black38,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(28, 28),
+                      padding: EdgeInsets.zero,
+                    ),
+                    onPressed: () => _bookMenu(context, ref, book),
+                    icon: const Icon(Icons.more_horiz, size: 17),
+                  ),
                 ),
-              if (book.isPinned)
-                const Positioned(
-                  left: 8,
-                  top: 8,
-                  child: Icon(Icons.push_pin, color: Colors.white, size: 16),
-                ),
-            ],
+                if (listening)
+                  const Positioned(left: 6, bottom: 6, child: _ListeningTag()),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          book.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-        ),
-        Text(
-          book.author,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 10.5, color: AppColors.graphite),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 8),
+          Text(
+            book.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+          Text(
+            book.author,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10.5, color: AppColors.graphite),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _BookList extends ConsumerWidget {
@@ -307,24 +345,53 @@ class _ProgressSeal extends StatelessWidget {
 }
 
 class _FormatChip extends StatelessWidget {
-  const _FormatChip(this.text);
+  const _FormatChip(this.text, {required this.selected, required this.onTap});
   final String text;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(10),
+    child: Container(
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: BoxDecoration(
+        color: selected ? AppColors.bambooSoft : null,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: selected ? AppColors.bamboo : Theme.of(context).dividerColor,
+        ),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: selected ? AppColors.bamboo : AppColors.graphite,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    ),
+  );
+}
+
+class _ListeningTag extends StatelessWidget {
+  const _ListeningTag();
 
   @override
   Widget build(BuildContext context) => Container(
-    alignment: Alignment.center,
-    padding: const EdgeInsets.symmetric(vertical: 12),
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
     decoration: BoxDecoration(
-      color: AppColors.bambooSoft,
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: AppColors.bamboo),
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(999),
     ),
-    child: Text(
-      text,
-      style: const TextStyle(
-        color: AppColors.bamboo,
-        fontWeight: FontWeight.w800,
-      ),
+    child: const Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.graphic_eq, color: Color(0xFF7CE0A6), size: 13),
+        SizedBox(width: 3),
+        Text('正在听', style: TextStyle(color: Colors.white, fontSize: 9)),
+      ],
     ),
   );
 }

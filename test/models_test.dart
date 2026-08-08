@@ -64,4 +64,22 @@ void main() {
     expect(decoded.location.chapterIndex, 1);
     expect(decoded.note, '我的笔记');
   });
+
+  test('TTS settings round-trip provider, voice and speed', () {
+    const settings = TtsSettings(
+      provider: TtsProvider.azure,
+      voiceName: '温润男声',
+      speed: 1.5,
+      endpoint: 'eastasia',
+      apiKey: 'test-key',
+    );
+
+    final decoded = TtsSettings.fromJson(settings.toJson());
+
+    expect(decoded.provider, TtsProvider.azure);
+    expect(decoded.voiceName, '温润男声');
+    expect(decoded.speed, 1.5);
+    expect(decoded.endpoint, 'eastasia');
+    expect(decoded.apiKey, 'test-key');
+  });
 }

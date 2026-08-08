@@ -14,6 +14,7 @@ class AppState {
   const AppState({
     this.books = const [],
     this.settings = const ReaderSettings(),
+    this.ttsSettings = const TtsSettings(),
     this.initialized = false,
     this.isGrid = true,
     this.activeAudioBookId,
@@ -23,6 +24,7 @@ class AppState {
 
   final List<Book> books;
   final ReaderSettings settings;
+  final TtsSettings ttsSettings;
   final bool initialized;
   final bool isGrid;
   final String? activeAudioBookId;
@@ -32,6 +34,7 @@ class AppState {
   AppState copyWith({
     List<Book>? books,
     ReaderSettings? settings,
+    TtsSettings? ttsSettings,
     bool? initialized,
     bool? isGrid,
     String? activeAudioBookId,
@@ -40,6 +43,7 @@ class AppState {
   }) => AppState(
     books: books ?? this.books,
     settings: settings ?? this.settings,
+    ttsSettings: ttsSettings ?? this.ttsSettings,
     initialized: initialized ?? this.initialized,
     isGrid: isGrid ?? this.isGrid,
     activeAudioBookId: activeAudioBookId ?? this.activeAudioBookId,
@@ -63,19 +67,21 @@ class AppController extends Notifier<AppState> {
       _repository.loadBooks(),
       _repository.loadSettings(),
       _repository.loadHighlights(),
+      _repository.loadTtsSettings(),
     ]);
     state = state.copyWith(
       books: values[0] as List<Book>,
       settings: values[1] as ReaderSettings,
       highlights: values[2] as List<Highlight>,
+      ttsSettings: values[3] as TtsSettings,
       initialized: true,
     );
   }
 
   void setGrid(bool value) => state = state.copyWith(isGrid: value);
 
-  Future<bool> importBook() async {
-    final book = await _repository.importBook();
+  Future<bool> importBook({BookFormat? format}) async {
+    final book = await _repository.importBook(format: format);
     if (book == null) return false;
     state = state.copyWith(books: [book, ...state.books]);
     await _repository.saveBooks(state.books);
@@ -145,6 +151,11 @@ class AppController extends Notifier<AppState> {
   Future<void> setSettings(ReaderSettings value) async {
     state = state.copyWith(settings: value);
     await _repository.saveSettings(value);
+  }
+
+  Future<void> setTtsSettings(TtsSettings value) async {
+    state = state.copyWith(ttsSettings: value);
+    await _repository.saveTtsSettings(value);
   }
 
   void setActiveAudio(String id) =>

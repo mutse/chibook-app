@@ -4,6 +4,8 @@ enum BookFormat { txt, epub, pdf }
 
 enum ReaderTheme { light, dark, eye }
 
+enum TtsProvider { builtin, aliyun, azure, openai }
+
 enum ReadingLocationKind { textOffset, pdfRegion }
 
 class Chapter {
@@ -264,6 +266,62 @@ class ReaderSettings {
     fontSize: (json['fontSize'] as num?)?.toDouble() ?? 17,
     lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.9,
     brightness: (json['brightness'] as num?)?.toDouble() ?? 1,
+  );
+}
+
+class TtsSettings {
+  const TtsSettings({
+    this.provider = TtsProvider.builtin,
+    this.voiceName = '知性女声',
+    this.systemVoiceId,
+    this.speed = 1,
+    this.endpoint = '',
+    this.apiKey = '',
+  });
+
+  final TtsProvider provider;
+  final String voiceName;
+  final String? systemVoiceId;
+  final double speed;
+  final String endpoint;
+  final String apiKey;
+
+  bool get isCloud => provider != TtsProvider.builtin;
+
+  TtsSettings copyWith({
+    TtsProvider? provider,
+    String? voiceName,
+    String? systemVoiceId,
+    double? speed,
+    String? endpoint,
+    String? apiKey,
+  }) => TtsSettings(
+    provider: provider ?? this.provider,
+    voiceName: voiceName ?? this.voiceName,
+    systemVoiceId: systemVoiceId ?? this.systemVoiceId,
+    speed: speed ?? this.speed,
+    endpoint: endpoint ?? this.endpoint,
+    apiKey: apiKey ?? this.apiKey,
+  );
+
+  Map<String, Object?> toJson() => {
+    'provider': provider.name,
+    'voiceName': voiceName,
+    'systemVoiceId': systemVoiceId,
+    'speed': speed,
+    'endpoint': endpoint,
+    'apiKey': apiKey,
+  };
+
+  factory TtsSettings.fromJson(Map<String, Object?> json) => TtsSettings(
+    provider: TtsProvider.values.byName(
+      json['provider'] as String? ?? TtsProvider.builtin.name,
+    ),
+    voiceName: json['voiceName'] as String? ?? '知性女声',
+    systemVoiceId: json['systemVoiceId'] as String?,
+    speed: (json['speed'] as num?)?.toDouble() ?? 1,
+    endpoint: json['endpoint'] as String? ?? '',
+    apiKey: json['apiKey'] as String? ?? '',
   );
 }
 

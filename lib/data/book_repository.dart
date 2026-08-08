@@ -19,6 +19,7 @@ class BookRepository {
   static const _booksKey = 'erdu.books.v1';
   static const _settingsKey = 'erdu.reader.settings.v1';
   static const _highlightsKey = 'erdu.highlights.v1';
+  static const _ttsSettingsKey = 'erdu.tts.settings.v1';
   final SharedPreferencesAsync _preferences;
   final _uuid = const Uuid();
 
@@ -63,10 +64,27 @@ class BookRepository {
   Future<void> saveHighlights(List<Highlight> highlights) =>
       _preferences.setString(_highlightsKey, encodeHighlights(highlights));
 
-  Future<Book?> importBook() async {
+  Future<TtsSettings> loadTtsSettings() async {
+    final stored = await _preferences.getString(_ttsSettingsKey);
+    if (stored == null) return const TtsSettings();
+    try {
+      return TtsSettings.fromJson(
+        (jsonDecode(stored) as Map).cast<String, Object?>(),
+      );
+    } catch (_) {
+      return const TtsSettings();
+    }
+  }
+
+  Future<void> saveTtsSettings(TtsSettings settings) =>
+      _preferences.setString(_ttsSettingsKey, jsonEncode(settings.toJson()));
+
+  Future<Book?> importBook({BookFormat? format}) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['txt', 'epub', 'pdf'],
+      allowedExtensions: format == null
+          ? const ['txt', 'epub', 'pdf']
+          : [format.name],
       withData: false,
     );
     final sourcePath = result?.files.single.path;

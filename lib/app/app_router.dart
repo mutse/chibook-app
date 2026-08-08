@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../features/player/player_page.dart';
 import '../features/profile/profile_page.dart';
+import '../features/profile/tts_settings_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/shelf/shelf_page.dart';
@@ -44,6 +45,11 @@ final appRouter = GoRouter(
       path: '/player/:id',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (_, state) => PlayerPage(bookId: state.pathParameters['id']!),
+    ),
+    GoRoute(
+      path: '/settings/tts',
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (_, _) => const TtsSettingsPage(),
     ),
   ],
 );

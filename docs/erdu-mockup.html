@@ -583,6 +583,63 @@
   .mini-swatch.dark{background:#1B1A17;}
   .mini-swatch.eye{background:var(--eye);}
 
+  /* =========================================================
+     7. TTS API SETTINGS
+  ==========================================================*/
+  .provider-card{
+    border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;margin-bottom:9px;cursor:pointer;
+    background:var(--paper-card);
+    transition:border-color .18s, background .18s;
+  }
+  .provider-card.active{border-color:var(--bamboo);background:var(--bamboo-soft);}
+  .provider-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+  .provider-name{font-size:13px;font-weight:700;font-family:"Noto Serif SC",serif;}
+  .provider-tag{font-size:9.5px;padding:2px 8px;border-radius:999px;font-weight:600;}
+  .provider-tag.free{background:var(--bamboo-soft);color:var(--bamboo);}
+  .provider-tag.cloud{background:var(--seal-soft);color:var(--seal);}
+  .provider-desc{font-size:10.5px;color:var(--graphite);line-height:1.5;}
+
+  .key-input-row{display:flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;}
+  .key-input{border:none;outline:none;flex:1;font-size:12px;font-family:inherit;background:none;color:var(--ink);}
+  .key-eye{cursor:pointer;font-size:13px;opacity:.6;}
+  .test-btn{
+    width:100%;padding:9px;border-radius:8px;
+    background:var(--ink);color:#fff;border:none;
+    font-size:12px;font-weight:600;cursor:pointer;
+  }
+  .conn-status{font-size:11px;margin-top:8px;min-height:14px;color:var(--bamboo);font-weight:600;}
+  .conn-status.err{color:var(--seal);}
+
+  .voice-list{background:var(--paper-card);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:14px;}
+  .voice-row{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 14px;border-bottom:1px solid var(--line);
+    cursor:pointer;
+  }
+  .voice-row:last-child{border-bottom:none;}
+  .voice-row.selected{background:var(--bamboo-soft);}
+  .voice-name{font-size:12.5px;font-weight:600;}
+  .voice-desc{font-size:10px;color:var(--graphite);margin-top:2px;}
+  .voice-play{
+    font-size:10.5px;color:var(--bamboo);border:1px solid var(--bamboo);
+    padding:4px 10px;border-radius:999px;font-weight:600;
+  }
+  .voice-play.playing{background:var(--bamboo);color:#fff;}
+
+  .speed-chip-light{
+    padding:6px 11px;border-radius:999px;font-size:11px;font-weight:600;
+    border:1px solid var(--line);color:var(--graphite);cursor:pointer;
+  }
+  .speed-chip-light.active{background:var(--bamboo);color:#fff;border-color:var(--bamboo);}
+
+  .ttssave-bar{
+    padding:12px 18px calc(12px + 10px);
+    border-top:1px solid var(--line);
+    background:var(--paper-card);
+    flex-shrink:0;
+  }
+
   ::-webkit-scrollbar{width:0;height:0;}
 
   @media (max-width:720px){
@@ -595,8 +652,8 @@
 
 <div class="lab-header">
   <div class="eyebrow">耳读 · ĚRDÚ — Interactive Prototype</div>
-  <h1>六屏并置原型</h1>
-  <p>点击各手机内的元素体验真实交互：书架视图切换、阅读器菜单与主题、听书播放控制、搜索联想、以及跨屏同步的主题设置。所有交互均在本页面内实时生效，无需切页。</p>
+  <h1>七屏并置原型</h1>
+  <p>点击各手机内的元素体验真实交互：书架视图切换、阅读器菜单与主题、听书播放控制、搜索联想、跨屏同步的主题设置，以及 TTS API 服务商配置与试听。所有交互均在本页面内实时生效，无需切页。</p>
 </div>
 
 <div class="gallery">
@@ -951,8 +1008,122 @@
             </div>
             <div class="settings-row" onclick="toast('默认发音人：知性女声')"><span>TTS 默认发音人</span><span class="val">知性女声 ›</span></div>
             <div class="settings-row" onclick="toast('默认语速：1.0x')"><span>TTS 默认语速</span><span class="val">1.0x ›</span></div>
+            <div class="settings-row" onclick="toast('见右侧「TTS API 设置」屏幕 →')"><span>TTS API 设置</span><span class="val">系统内置 ›</span></div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 7. TTS API SETTINGS ============ -->
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="no">7</span>TTS API 设置</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="statusbar"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
+        <div class="shelf-top" style="padding-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:16px;color:var(--ink-soft);">‹</span>
+            <div class="shelf-title" style="font-size:17px;">TTS API 设置</div>
+          </div>
+        </div>
+
+        <div class="profile-scroll" style="padding-top:4px;">
+
+          <div class="search-section-title" style="margin-top:6px;">朗读引擎</div>
+          <div class="provider-card active" onclick="pickProvider(this,'builtin')">
+            <div class="provider-row">
+              <div class="provider-name">系统内置语音</div>
+              <div class="provider-tag free">免费</div>
+            </div>
+            <div class="provider-desc">调用设备自带 TTS 引擎，无需联网，音质因机型而异</div>
+          </div>
+
+          <div class="provider-card" onclick="pickProvider(this,'aliyun')">
+            <div class="provider-row">
+              <div class="provider-name">阿里云 · 智能语音</div>
+              <div class="provider-tag cloud">云端</div>
+            </div>
+            <div class="provider-desc">中文语气自然，支持多种方言与情感发音人</div>
+          </div>
+
+          <div class="provider-card" onclick="pickProvider(this,'azure')">
+            <div class="provider-row">
+              <div class="provider-name">Azure Speech</div>
+              <div class="provider-tag cloud">云端</div>
+            </div>
+            <div class="provider-desc">微软神经网络语音，中英混排朗读表现稳定</div>
+          </div>
+
+          <div class="provider-card" onclick="pickProvider(this,'openai')">
+            <div class="provider-row">
+              <div class="provider-name">OpenAI TTS</div>
+              <div class="provider-tag cloud">云端</div>
+            </div>
+            <div class="provider-desc">音色自然度高，按朗读时长计费</div>
+          </div>
+
+          <div id="cloudConfigBlock" style="display:none;">
+            <div class="search-section-title">接口配置</div>
+            <div class="stat-card" style="padding:14px;">
+              <div class="set-row" style="margin-bottom:12px;">
+                <div class="set-label">API Key</div>
+                <div class="key-input-row">
+                  <input id="apiKeyInput" type="password" class="key-input" placeholder="粘贴你的 API Key" value="sk-••••••••••••7f2a">
+                  <span class="key-eye" onclick="toggleKeyVisible()">👁</span>
+                </div>
+              </div>
+              <div class="set-row" style="margin-bottom:12px;">
+                <div class="set-label">接入地区 / Endpoint</div>
+                <div class="key-input-row">
+                  <input class="key-input" placeholder="如 cn-shanghai" value="cn-shanghai">
+                </div>
+              </div>
+              <div class="set-row" style="margin-bottom:0;">
+                <button class="test-btn" onclick="testConnection()">
+                  <span id="testBtnText">验证连接</span>
+                </button>
+              </div>
+              <div class="conn-status" id="connStatus"></div>
+            </div>
+          </div>
+
+          <div class="search-section-title">发音人</div>
+          <div class="voice-list" id="voiceList">
+            <div class="voice-row selected" onclick="pickVoice(this)">
+              <div class="voice-info"><div class="voice-name">知性女声</div><div class="voice-desc">标准普通话 · 沉稳</div></div>
+              <div class="voice-play" onclick="event.stopPropagation(); previewVoice(this)">试听</div>
+            </div>
+            <div class="voice-row" onclick="pickVoice(this)">
+              <div class="voice-info"><div class="voice-name">温润男声</div><div class="voice-desc">标准普通话 · 叙事感</div></div>
+              <div class="voice-play" onclick="event.stopPropagation(); previewVoice(this)">试听</div>
+            </div>
+            <div class="voice-row" onclick="pickVoice(this)">
+              <div class="voice-info"><div class="voice-name">清亮少年音</div><div class="voice-desc">轻快语调</div></div>
+              <div class="voice-play" onclick="event.stopPropagation(); previewVoice(this)">试听</div>
+            </div>
+          </div>
+
+          <div class="search-section-title">默认参数</div>
+          <div class="stat-card" style="padding:14px 14px 4px;">
+            <div class="set-row">
+              <div class="set-label">默认语速</div>
+              <div class="speed-chips" style="justify-content:flex-start;">
+                <span class="speed-chip-light" onclick="setDefaultSpeed(this)">0.5x</span>
+                <span class="speed-chip-light active" onclick="setDefaultSpeed(this)">1.0x</span>
+                <span class="speed-chip-light" onclick="setDefaultSpeed(this)">1.5x</span>
+                <span class="speed-chip-light" onclick="setDefaultSpeed(this)">2.0x</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="ttssave-bar">
+          <button class="sheet-btn" onclick="toast('已保存 TTS 设置'); toastTts('设置已保存');">保存设置</button>
+        </div>
+        <div class="toast" id="ttsToast"></div>
+        <div class="home-indicator"></div>
       </div>
     </div>
   </div>
@@ -1123,6 +1294,46 @@
     document.getElementById('statB').textContent = data.b;
     document.getElementById('statC').textContent = data.c;
   }
+  /* ---------- 7. TTS API Settings ---------- */
+  function pickProvider(el, key){
+    document.querySelectorAll('.provider-card').forEach(c=>c.classList.remove('active'));
+    el.classList.add('active');
+    const cloudBlock = document.getElementById('cloudConfigBlock');
+    cloudBlock.style.display = (key==='builtin') ? 'none' : 'block';
+    document.getElementById('connStatus').textContent = '';
+    toastTts(key==='builtin' ? '已切换至系统内置语音' : '已选择 '+el.querySelector('.provider-name').textContent);
+  }
+  function toggleKeyVisible(){
+    const input = document.getElementById('apiKeyInput');
+    input.type = input.type === 'password' ? 'text' : 'password';
+  }
+  function testConnection(){
+    const btnText = document.getElementById('testBtnText');
+    const status = document.getElementById('connStatus');
+    btnText.textContent = '验证中…';
+    status.textContent = '';
+    status.classList.remove('err');
+    setTimeout(()=>{
+      btnText.textContent = '验证连接';
+      status.textContent = '✓ 连接成功，可正常调用';
+    }, 900);
+  }
+  function pickVoice(el){
+    document.querySelectorAll('.voice-row').forEach(r=>r.classList.remove('selected'));
+    el.classList.add('selected');
+    toastTts('默认发音人：'+el.querySelector('.voice-name').textContent);
+  }
+  function previewVoice(btn){
+    document.querySelectorAll('.voice-play').forEach(b=>{b.classList.remove('playing'); b.textContent='试听';});
+    btn.classList.add('playing');
+    btn.textContent = '播放中';
+    setTimeout(()=>{btn.classList.remove('playing'); btn.textContent='试听';}, 1400);
+  }
+  function setDefaultSpeed(el){
+    el.parentElement.querySelectorAll('.speed-chip-light').forEach(c=>c.classList.remove('active'));
+    el.classList.add('active');
+  }
+  function toastTts(msg){ showToastOn('ttsToast', msg); }
 </script>
 </body>
 </html>

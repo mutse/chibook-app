@@ -30,6 +30,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   double _speed = 1;
   int _characterOffset = 0;
   int _speechStartOffset = 0;
+  bool _stopAfterCurrentChapter = false;
 
   Future<void> _initialize() async {
     await _tts.setLanguage('zh-CN');
@@ -60,6 +61,12 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     });
     _tts.setCompletionHandler(() async {
       final book = _book;
+      if (_stopAfterCurrentChapter) {
+        _stopAfterCurrentChapter = false;
+        _publish(playing: false, state: AudioProcessingState.completed);
+        customEvent.add({'type': 'sleepComplete', 'chapter': _chapter});
+        return;
+      }
       if (book != null && _chapter < book.chapters.length - 1) {
         _chapter++;
         _characterOffset = 0;
@@ -93,6 +100,19 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
+  Future<void> applySettings(TtsSettings settings) async {
+    await _tts.setPitch(switch (settings.voiceName) {
+      '温润男声' => .85,
+      '清亮少年音' => 1.18,
+      _ => 1.02,
+    });
+    await setSpeed(settings.speed);
+  }
+
+  void stopAfterCurrentChapter(bool enabled) {
+    _stopAfterCurrentChapter = enabled;
+  }
+
   @override
   Future<void> play() => _speakCurrent();
 
@@ -104,6 +124,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> stop() async {
+    _stopAfterCurrentChapter = false;
     await _tts.stop();
     _publish(playing: false, state: AudioProcessingState.idle);
   }

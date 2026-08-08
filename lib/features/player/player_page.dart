@@ -50,8 +50,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       final book = _book;
       if (book == null || book.chapters.isEmpty) return;
       _chapter = book.chapterIndex.clamp(0, book.chapters.length - 1);
+      _speed = ref.read(appControllerProvider).ttsSettings.speed;
       ref.read(appControllerProvider.notifier).setActiveAudio(book.id);
       await ttsAudioHandler.loadBook(book, chapterIndex: _chapter);
+      await ttsAudioHandler.applySettings(
+        ref.read(appControllerProvider).ttsSettings,
+      );
       _playbackSubscription = ttsAudioHandler.playbackState.listen((value) {
         if (mounted) setState(() => _playing = value.playing);
       });
@@ -84,6 +88,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           ref
               .read(appControllerProvider.notifier)
               .updateProgress(book.id, next, (next + 1) / book.chapters.length);
+        }
+        if (event['type'] == 'sleepComplete') {
+          setState(() => _timerLabel = null);
         }
       });
     });
@@ -324,7 +331,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  const _PlayerUtility(icon: Icons.mic_none, label: '发音人'),
+                  _PlayerUtility(
+                    icon: Icons.mic_none,
+                    label: state.ttsSettings.voiceName,
+                    onTap: () => context.push('/settings/tts'),
+                  ),
                   _PlayerUtility(
                     icon: Icons.timer_outlined,
                     label: _timerLabel ?? '定时关闭',
@@ -345,32 +356,62 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   }
 
   Future<void> _showTimer() async {
-    final minutes = await showModalBottomSheet<int>(
+    final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: const Color(0xFF1E1C19),
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [15, 30, 60]
-              .map(
-                (m) => ListTile(
-                  title: Text(
-                    '$m 分钟',
-                    style: const TextStyle(color: Color(0xFFD8D0BE)),
-                  ),
-                  onTap: () => Navigator.pop(context, m),
+          children: [
+            ListTile(
+              title: const Text(
+                '播完本章',
+                style: TextStyle(color: Color(0xFFD8D0BE)),
+              ),
+              onTap: () => Navigator.pop(context, 'chapter'),
+            ),
+            ...[15, 30, 60].map(
+              (m) => ListTile(
+                title: Text(
+                  '$m 分钟',
+                  style: const TextStyle(color: Color(0xFFD8D0BE)),
                 ),
-              )
-              .toList(),
+                onTap: () => Navigator.pop(context, '$m'),
+              ),
+            ),
+            if (_timerLabel != null)
+              ListTile(
+                title: const Text(
+                  '取消定时',
+                  style: TextStyle(color: AppColors.seal),
+                ),
+                onTap: () => Navigator.pop(context, 'cancel'),
+              ),
+          ],
         ),
       ),
     );
-    if (minutes == null) return;
+    if (choice == null) return;
     _sleepTimer?.cancel();
+    ttsAudioHandler.stopAfterCurrentChapter(choice == 'chapter');
+    if (choice == 'cancel') {
+      setState(() => _timerLabel = null);
+      return;
+    }
+    if (choice == 'chapter') {
+      setState(() => _timerLabel = '本章结束');
+      return;
+    }
+    final minutes = int.parse(choice);
     _sleepTimer = Timer(Duration(minutes: minutes), () {
       unawaited(ttsAudioHandler.stop());
-      if (mounted) setState(() => _playing = false);
+      if (mounted) {
+        setState(() {
+          _playing = false;
+          _timerLabel = null;
+        });
+      }
     });
     setState(() => _timerLabel = '$minutes 分钟');
   }

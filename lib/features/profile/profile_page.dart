@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../app/app_state.dart';
 import '../../core/models.dart';
@@ -176,14 +177,25 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               _SettingTile(
                 icon: Icons.record_voice_over_outlined,
                 title: 'TTS 默认发音人',
-                value: '系统中文语音',
-                onTap: () => _message(context, '发音人由系统 TTS 提供'),
+                value: state.ttsSettings.voiceName,
+                onTap: () => context.push('/settings/tts'),
               ),
               _SettingTile(
                 icon: Icons.speed,
                 title: 'TTS 默认语速',
-                value: '1.0x',
-                onTap: () => _message(context, '可在听书页实时调整'),
+                value: '${state.ttsSettings.speed}x',
+                onTap: () => context.push('/settings/tts'),
+              ),
+              _SettingTile(
+                icon: Icons.cloud_outlined,
+                title: 'TTS API 设置',
+                value: switch (state.ttsSettings.provider) {
+                  TtsProvider.builtin => '系统内置',
+                  TtsProvider.aliyun => '阿里云',
+                  TtsProvider.azure => 'Azure',
+                  TtsProvider.openai => 'OpenAI',
+                },
+                onTap: () => context.push('/settings/tts'),
               ),
             ],
           ),
