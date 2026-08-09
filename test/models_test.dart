@@ -1,4 +1,4 @@
-import 'package:erdu/core/models.dart';
+import 'package:chibook/core/models.dart';
 import 'package:test/test.dart';
 
 void main() {

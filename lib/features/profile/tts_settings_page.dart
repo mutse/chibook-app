@@ -383,7 +383,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       _ => 1.02,
     });
     setState(() => _previewing = voice.id);
-    await _previewTts.speak('山水有清音，欢迎使用耳读。');
+    await _previewTts.speak('山水有清音，欢迎使用 chibook。');
   }
 
   Future<void> _save() async {

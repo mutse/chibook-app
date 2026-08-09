@@ -21,7 +21,7 @@ class ErduApp extends ConsumerWidget {
       ReaderTheme.light => buildAppTheme(brightness: Brightness.light),
     };
     return MaterialApp.router(
-      title: '耳读',
+      title: 'chibook',
       debugShowCheckedModeBanner: false,
       theme: theme,
       routerConfig: appRouter,

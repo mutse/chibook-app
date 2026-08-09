@@ -14,7 +14,7 @@ Future<void> initializeAudioService() async {
     builder: TtsAudioHandler.new,
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.chibook.erdu.tts',
-      androidNotificationChannelName: '耳读听书',
+      androidNotificationChannelName: 'chibook 听书',
       androidNotificationOngoing: true,
       androidStopForegroundOnPause: true,
     ),

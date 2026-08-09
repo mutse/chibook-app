@@ -1,6 +1,6 @@
-# 耳读
+# chibook
 
-耳读是一款本地优先的 Flutter 阅读与听书 App，视觉与交互依据 `docs/erdu-mockup.html` 实现。项目不含书城、社交、账号或云同步，书籍与阅读设置仅保存在设备本地。
+chibook 是一款本地优先的 Flutter 阅读与听书 App，视觉与交互依据 `docs/erdu-mockup.html` 实现。项目不含书城、社交、账号或云同步，书籍与阅读设置仅保存在设备本地。
 
 ## 已实现
 
