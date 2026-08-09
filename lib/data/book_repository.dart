@@ -11,16 +11,21 @@ import 'package:uuid/uuid.dart';
 import 'package:xml/xml.dart';
 
 import '../core/models.dart';
+import '../services/pdf_ocr_service.dart';
 
 class BookRepository {
-  BookRepository({SharedPreferencesAsync? preferences})
-    : _preferences = preferences ?? SharedPreferencesAsync();
+  BookRepository({SharedPreferencesAsync? preferences, PdfOcrService? ocr})
+    : _preferences = preferences ?? SharedPreferencesAsync(),
+      _ocr = ocr ?? PdfOcrService();
 
   static const _booksKey = 'erdu.books.v1';
   static const _settingsKey = 'erdu.reader.settings.v1';
   static const _highlightsKey = 'erdu.highlights.v1';
   static const _ttsSettingsKey = 'erdu.tts.settings.v1';
+  static const _audioProgressKey = 'erdu.audio.progress.v1';
+  static const _listeningRecordsKey = 'erdu.listening.records.v1';
   final SharedPreferencesAsync _preferences;
+  final PdfOcrService _ocr;
   final _uuid = const Uuid();
 
   Future<List<Book>> loadBooks() async {
@@ -78,6 +83,35 @@ class BookRepository {
 
   Future<void> saveTtsSettings(TtsSettings settings) =>
       _preferences.setString(_ttsSettingsKey, jsonEncode(settings.toJson()));
+
+  Future<List<AudioProgress>> loadAudioProgress() async {
+    final stored = await _preferences.getString(_audioProgressKey);
+    if (stored == null) return const [];
+    try {
+      return decodeAudioProgress(stored);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> saveAudioProgress(List<AudioProgress> values) =>
+      _preferences.setString(_audioProgressKey, encodeAudioProgress(values));
+
+  Future<List<ListeningRecord>> loadListeningRecords() async {
+    final stored = await _preferences.getString(_listeningRecordsKey);
+    if (stored == null) return const [];
+    try {
+      return decodeListeningRecords(stored);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> saveListeningRecords(List<ListeningRecord> values) =>
+      _preferences.setString(
+        _listeningRecordsKey,
+        encodeListeningRecords(values),
+      );
 
   Future<Book?> importBook({BookFormat? format}) async {
     final result = await FilePicker.pickFiles(
@@ -151,12 +185,19 @@ class BookRepository {
       var hasText = false;
       for (final page in document.pages) {
         final rawText = await page.loadText();
-        final text =
+        var text =
             rawText?.fullText
                 .replaceAll(RegExp(r'[ \t]+'), ' ')
                 .replaceAll(RegExp(r'\n{3,}'), '\n\n')
                 .trim() ??
             '';
+        if (text.isEmpty) {
+          try {
+            text = await _ocr.recognizePage(page) ?? '';
+          } catch (_) {
+            text = '';
+          }
+        }
         hasText = hasText || text.isNotEmpty;
         chapters.add(Chapter(title: '第 ${page.pageNumber} 页', content: text));
       }

@@ -6,6 +6,8 @@ enum ReaderTheme { light, dark, eye }
 
 enum TtsProvider { builtin, aliyun, azure, openai }
 
+enum PlaybackMode { sequential, reverse, repeatOne }
+
 enum ReadingLocationKind { textOffset, pdfRegion }
 
 class Chapter {
@@ -221,12 +223,75 @@ class AudioProgress {
     required this.chapterIndex,
     required this.characterOffset,
     required this.speed,
+    required this.updatedAt,
+    this.mode = PlaybackMode.sequential,
   });
 
   final String bookId;
   final int chapterIndex;
   final int characterOffset;
   final double speed;
+  final DateTime updatedAt;
+  final PlaybackMode mode;
+
+  Map<String, Object?> toJson() => {
+    'bookId': bookId,
+    'chapterIndex': chapterIndex,
+    'characterOffset': characterOffset,
+    'speed': speed,
+    'updatedAt': updatedAt.toIso8601String(),
+    'mode': mode.name,
+  };
+
+  factory AudioProgress.fromJson(Map<String, Object?> json) => AudioProgress(
+    bookId: json['bookId']! as String,
+    chapterIndex: json['chapterIndex'] as int? ?? 0,
+    characterOffset: json['characterOffset'] as int? ?? 0,
+    speed: (json['speed'] as num?)?.toDouble() ?? 1,
+    updatedAt:
+        DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0),
+    mode:
+        PlaybackMode.values
+            .where((mode) => mode.name == json['mode'])
+            .firstOrNull ??
+        PlaybackMode.sequential,
+  );
+}
+
+class ListeningRecord {
+  const ListeningRecord({
+    required this.bookId,
+    required this.chapterIndex,
+    required this.characterOffset,
+    required this.listenedSeconds,
+    required this.updatedAt,
+  });
+
+  final String bookId;
+  final int chapterIndex;
+  final int characterOffset;
+  final int listenedSeconds;
+  final DateTime updatedAt;
+
+  Map<String, Object?> toJson() => {
+    'bookId': bookId,
+    'chapterIndex': chapterIndex,
+    'characterOffset': characterOffset,
+    'listenedSeconds': listenedSeconds,
+    'updatedAt': updatedAt.toIso8601String(),
+  };
+
+  factory ListeningRecord.fromJson(Map<String, Object?> json) =>
+      ListeningRecord(
+        bookId: json['bookId']! as String,
+        chapterIndex: json['chapterIndex'] as int? ?? 0,
+        characterOffset: json['characterOffset'] as int? ?? 0,
+        listenedSeconds: json['listenedSeconds'] as int? ?? 0,
+        updatedAt:
+            DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+      );
 }
 
 class ReaderSettings {
@@ -292,16 +357,20 @@ class TtsSettings {
     TtsProvider? provider,
     String? voiceName,
     String? systemVoiceId,
+    bool clearSystemVoiceId = false,
     double? speed,
     String? endpoint,
     String? apiKey,
+    bool clearApiKey = false,
   }) => TtsSettings(
     provider: provider ?? this.provider,
     voiceName: voiceName ?? this.voiceName,
-    systemVoiceId: systemVoiceId ?? this.systemVoiceId,
+    systemVoiceId: clearSystemVoiceId
+        ? null
+        : systemVoiceId ?? this.systemVoiceId,
     speed: speed ?? this.speed,
     endpoint: endpoint ?? this.endpoint,
-    apiKey: apiKey ?? this.apiKey,
+    apiKey: clearApiKey ? '' : apiKey ?? this.apiKey,
   );
 
   Map<String, Object?> toJson() => {
@@ -310,7 +379,6 @@ class TtsSettings {
     'systemVoiceId': systemVoiceId,
     'speed': speed,
     'endpoint': endpoint,
-    'apiKey': apiKey,
   };
 
   factory TtsSettings.fromJson(Map<String, Object?> json) => TtsSettings(
@@ -340,5 +408,27 @@ List<Highlight> decodeHighlights(String source) =>
         .map(
           (value) =>
               Highlight.fromJson((value! as Map).cast<String, Object?>()),
+        )
+        .toList();
+
+String encodeAudioProgress(List<AudioProgress> values) =>
+    jsonEncode(values.map((value) => value.toJson()).toList());
+
+List<AudioProgress> decodeAudioProgress(String source) =>
+    (jsonDecode(source) as List<Object?>)
+        .map(
+          (value) =>
+              AudioProgress.fromJson((value! as Map).cast<String, Object?>()),
+        )
+        .toList();
+
+String encodeListeningRecords(List<ListeningRecord> values) =>
+    jsonEncode(values.map((value) => value.toJson()).toList());
+
+List<ListeningRecord> decodeListeningRecords(String source) =>
+    (jsonDecode(source) as List<Object?>)
+        .map(
+          (value) =>
+              ListeningRecord.fromJson((value! as Map).cast<String, Object?>()),
         )
         .toList();

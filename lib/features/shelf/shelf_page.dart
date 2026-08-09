@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/app_state.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
+import '../../services/tts_audio_handler.dart';
 
 class ShelfPage extends ConsumerWidget {
   const ShelfPage({super.key});
@@ -21,7 +22,7 @@ class ShelfPage extends ConsumerWidget {
         actions: [
           IconButton(
             tooltip: '搜索',
-            onPressed: () => context.push('/search'),
+            onPressed: () => context.push('/shelf/search'),
             icon: const Icon(Icons.search),
           ),
           _ViewButton(
@@ -97,7 +98,7 @@ class ShelfPage extends ConsumerWidget {
                 const SizedBox(height: 8),
                 Text(
                   selectedFormat == BookFormat.pdf
-                      ? 'PDF 使用固定版式阅读，仅支持整体缩放。'
+                      ? 'PDF 优先提取文本；扫描页会在设备端自动 OCR，首次导入可能较慢。'
                       : 'TXT 与 EPUB 支持字号、行距和阅读主题调整。',
                   style: Theme.of(
                     context,
@@ -111,6 +112,11 @@ class ShelfPage extends ConsumerWidget {
     );
     if (format == null || !context.mounted) return;
     try {
+      if (format == BookFormat.pdf) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('正在解析 PDF，扫描页将自动 OCR…')));
+      }
       final success = await ref
           .read(appControllerProvider.notifier)
           .importBook(format: format);
@@ -447,6 +453,7 @@ Future<void> _bookMenu(BuildContext context, WidgetRef ref, Book book) async {
   }
   if (action == 'listen' && context.mounted) context.push('/player/${book.id}');
   if (action == 'delete') {
+    await ttsAudioHandler.unloadBook(book.id);
     await ref.read(appControllerProvider.notifier).removeBook(book.id);
   }
 }
@@ -584,6 +591,9 @@ Future<void> _showMultiSelect(
       ),
     );
     if (confirmed == true) {
+      for (final id in selected) {
+        await ttsAudioHandler.unloadBook(id);
+      }
       await ref.read(appControllerProvider.notifier).removeBooks(selected);
     }
   }

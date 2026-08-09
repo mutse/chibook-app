@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import '../../app/app_state.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
+import '../../services/tts_audio_handler.dart';
+import '../../services/cloud_tts_service.dart';
 
 class TtsSettingsPage extends ConsumerStatefulWidget {
   const TtsSettingsPage({super.key});
@@ -24,11 +26,16 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   bool _testing = false;
   String? _status;
   String? _previewing;
+  List<_VoiceOption> _voices = _fallbackVoices;
+  final _credentials = const TtsCredentialStore();
+  final _cloudTts = CloudTtsService();
+  int _cacheBytes = 0;
+  Map<String, int> _bookCacheBytes = const {};
 
-  static const _voices = <(String, String)>[
-    ('知性女声', '标准普通话 · 沉稳'),
-    ('温润男声', '标准普通话 · 叙事感'),
-    ('清亮少年音', '轻快语调'),
+  static const _fallbackVoices = <_VoiceOption>[
+    _VoiceOption(name: '知性女声', locale: 'zh-CN'),
+    _VoiceOption(name: '温润男声', locale: 'zh-CN'),
+    _VoiceOption(name: '清亮少年音', locale: 'zh-CN'),
   ];
 
   @override
@@ -36,7 +43,6 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     super.didChangeDependencies();
     if (_initialized) return;
     _draft = ref.read(appControllerProvider).ttsSettings;
-    _keyController.text = _draft.apiKey;
     _endpointController.text = _draft.endpoint;
     _previewTts.setLanguage('zh-CN');
     _previewTts.setCompletionHandler(() {
@@ -45,6 +51,9 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     _previewTts.setCancelHandler(() {
       if (mounted) setState(() => _previewing = null);
     });
+    _loadApiKey();
+    _refreshVoices();
+    _loadCacheSize();
     _initialized = true;
   }
 
@@ -76,10 +85,10 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
           (provider) => _ProviderCard(
             provider: provider,
             selected: _draft.provider == provider,
-            onTap: () => setState(() {
-              _draft = _draft.copyWith(provider: provider);
-              _status = null;
-            }),
+            enabled:
+                provider == TtsProvider.builtin ||
+                provider == TtsProvider.openai,
+            onTap: () => _selectProvider(provider),
           ),
         ),
         if (_draft.isCloud) ...[
@@ -129,7 +138,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                     Text(
                       _status!,
                       style: TextStyle(
-                        color: _status!.startsWith('配置完整')
+                        color: _status!.startsWith('连接成功')
                             ? AppColors.bamboo
                             : AppColors.seal,
                         fontSize: 12,
@@ -139,7 +148,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                   ],
                   const SizedBox(height: 8),
                   const Text(
-                    '这里只检查配置完整性；云端引擎尚未接入播放链路，听书会继续使用系统语音。',
+                    'OpenAI 语音由 AI 合成，并非真人录音。播放时会按段生成 MP3 并缓存在本机。',
                     style: TextStyle(color: AppColors.graphite, fontSize: 11),
                   ),
                 ],
@@ -154,21 +163,30 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
           clipBehavior: Clip.antiAlias,
           child: Column(
             children: _voices.map((voice) {
-              final selected = _draft.voiceName == voice.$1;
+              final selected =
+                  _draft.systemVoiceId == voice.id ||
+                  (_draft.systemVoiceId == null &&
+                      _draft.voiceName == voice.name);
               return ListTile(
                 selected: selected,
                 selectedTileColor: AppColors.bambooSoft,
                 title: Text(
-                  voice.$1,
+                  voice.name,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
-                subtitle: Text(voice.$2),
-                trailing: OutlinedButton(
-                  onPressed: () => _preview(voice.$1),
-                  child: Text(_previewing == voice.$1 ? '停止' : '试听'),
-                ),
+                subtitle: Text(voice.locale),
+                trailing: _draft.provider == TtsProvider.builtin
+                    ? OutlinedButton(
+                        onPressed: () => _preview(voice),
+                        child: Text(_previewing == voice.id ? '停止' : '试听'),
+                      )
+                    : const Icon(Icons.check_circle_outline),
                 onTap: () => setState(
-                  () => _draft = _draft.copyWith(voiceName: voice.$1),
+                  () => _draft = _draft.copyWith(
+                    voiceName: voice.name,
+                    systemVoiceId: voice.isSystem ? voice.id : null,
+                    clearSystemVoiceId: !voice.isSystem,
+                  ),
                 ),
               );
             }).toList(),
@@ -192,6 +210,35 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
               )
               .toList(),
         ),
+        if (_draft.provider == TtsProvider.openai) ...[
+          const _SectionTitle('云端音频缓存'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('已缓存音频'),
+            subtitle: Text(_formatBytes(_cacheBytes)),
+            trailing: TextButton(
+              onPressed: _cacheBytes == 0 ? null : _clearCache,
+              child: const Text('全部清理'),
+            ),
+          ),
+          ...ref
+              .watch(appControllerProvider)
+              .books
+              .where((book) => (_bookCacheBytes[book.id] ?? 0) > 0)
+              .map(
+                (book) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(book.title),
+                  subtitle: Text(_formatBytes(_bookCacheBytes[book.id] ?? 0)),
+                  trailing: IconButton(
+                    tooltip: '清理本书缓存',
+                    onPressed: () => _clearBookCache(book),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ),
+              ),
+        ],
       ],
     ),
     bottomNavigationBar: SafeArea(
@@ -210,32 +257,132 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       _testing = true;
       _status = null;
     });
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
     final key = _keyController.text.trim();
     final endpoint = _endpointController.text.trim();
-    setState(() {
-      _testing = false;
-      _status = key.isEmpty || endpoint.isEmpty
-          ? '请填写 API Key 和 Endpoint'
-          : '配置完整，保存后生效';
-    });
+    if (key.isEmpty || endpoint.isEmpty) {
+      setState(() {
+        _testing = false;
+        _status = '请填写 API Key 和 Endpoint';
+      });
+      return;
+    }
+    try {
+      await _cloudTts.validateOpenAi(apiKey: key, endpoint: endpoint);
+      if (mounted) setState(() => _status = '连接成功，配置可用');
+    } catch (error) {
+      if (mounted) setState(() => _status = error.toString());
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
   }
 
-  Future<void> _preview(String voiceName) async {
-    if (_previewing == voiceName) {
+  Future<void> _loadApiKey() async {
+    final key = await _credentials.readOpenAiKey();
+    if (mounted) _keyController.text = key;
+  }
+
+  void _selectProvider(TtsProvider provider) {
+    setState(() {
+      _draft = _draft.copyWith(provider: provider);
+      if (provider == TtsProvider.openai &&
+          _endpointController.text.trim().isEmpty) {
+        _endpointController.text = CloudTtsService.defaultEndpoint;
+      }
+      if (provider == TtsProvider.openai) {
+        _voices = _openAiVoices;
+      }
+      _status = null;
+    });
+    if (provider == TtsProvider.builtin) _loadVoices();
+  }
+
+  void _refreshVoices() {
+    if (_draft.provider == TtsProvider.openai) {
+      _voices = _openAiVoices;
+    } else {
+      _loadVoices();
+    }
+  }
+
+  Future<void> _loadVoices() async {
+    final raw = await _previewTts.getVoices;
+    if (raw is! List || !mounted) return;
+    final values = raw
+        .whereType<Map>()
+        .map(
+          (voice) => _VoiceOption(
+            name: voice['name']?.toString() ?? '',
+            locale: voice['locale']?.toString() ?? '',
+            isSystem: true,
+          ),
+        )
+        .where(
+          (voice) =>
+              voice.name.isNotEmpty &&
+              voice.locale.toLowerCase().startsWith('zh'),
+        )
+        .take(12)
+        .toList();
+    if (values.isNotEmpty) setState(() => _voices = values);
+  }
+
+  Future<void> _loadCacheSize() async {
+    final bytes = await _cloudTts.cacheSize();
+    final books = ref.read(appControllerProvider).books;
+    final entries = <String, int>{};
+    for (final book in books) {
+      final size = await _cloudTts.cacheSize(bookId: book.id);
+      if (size > 0) entries[book.id] = size;
+    }
+    if (mounted) {
+      setState(() {
+        _cacheBytes = bytes;
+        _bookCacheBytes = entries;
+      });
+    }
+  }
+
+  Future<void> _clearCache() async {
+    await ttsAudioHandler.pause();
+    await _cloudTts.clearCache();
+    await _loadCacheSize();
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('云端音频缓存已清理')));
+    }
+  }
+
+  Future<void> _clearBookCache(Book book) async {
+    if (ttsAudioHandler.currentBookId == book.id) {
+      await ttsAudioHandler.pause();
+    }
+    await _cloudTts.clearCache(bookId: book.id);
+    await _loadCacheSize();
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已清理《${book.title}》的音频缓存')));
+    }
+  }
+
+  Future<void> _preview(_VoiceOption voice) async {
+    if (_previewing == voice.id) {
       await _previewTts.stop();
       if (mounted) setState(() => _previewing = null);
       return;
     }
     await _previewTts.stop();
+    if (voice.isSystem) {
+      await _previewTts.setVoice({'name': voice.name, 'locale': voice.locale});
+    }
     await _previewTts.setSpeechRate((_draft.speed * .5).clamp(.1, 1));
-    await _previewTts.setPitch(switch (voiceName) {
+    await _previewTts.setPitch(switch (voice.name) {
       '温润男声' => .85,
       '清亮少年音' => 1.18,
       _ => 1.02,
     });
-    setState(() => _previewing = voiceName);
+    setState(() => _previewing = voice.id);
     await _previewTts.speak('山水有清音，欢迎使用耳读。');
   }
 
@@ -245,6 +392,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       endpoint: _endpointController.text.trim(),
     );
     await ref.read(appControllerProvider.notifier).setTtsSettings(value);
+    await ttsAudioHandler.applySettings(value);
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
@@ -274,11 +422,13 @@ class _ProviderCard extends StatelessWidget {
   const _ProviderCard({
     required this.provider,
     required this.selected,
+    required this.enabled,
     required this.onTap,
   });
 
   final TtsProvider provider;
   final bool selected;
+  final bool enabled;
   final VoidCallback onTap;
 
   @override
@@ -300,10 +450,17 @@ class _ProviderCard extends StatelessWidget {
         ),
       ),
       child: ListTile(
+        enabled: enabled,
         title: Text(name, style: const TextStyle(fontWeight: FontWeight.w800)),
         subtitle: Text(description),
         trailing: Chip(
-          label: Text(provider == TtsProvider.builtin ? '免费' : '云端'),
+          label: Text(
+            provider == TtsProvider.builtin
+                ? '免费'
+                : enabled
+                ? '云端'
+                : '待接入',
+          ),
           visualDensity: VisualDensity.compact,
         ),
         onTap: onTap,
@@ -318,3 +475,38 @@ String _endpointHint(TtsProvider provider) => switch (provider) {
   TtsProvider.openai => 'https://api.openai.com/v1',
   TtsProvider.builtin => '',
 };
+
+class _VoiceOption {
+  const _VoiceOption({
+    required this.name,
+    required this.locale,
+    this.isSystem = false,
+  });
+
+  final String name;
+  final String locale;
+  final bool isSystem;
+  String get id => '$name|$locale';
+}
+
+const _openAiVoices = <_VoiceOption>[
+  _VoiceOption(name: 'Marin', locale: 'AI · 推荐'),
+  _VoiceOption(name: 'Cedar', locale: 'AI · 推荐'),
+  _VoiceOption(name: 'Coral', locale: 'AI'),
+  _VoiceOption(name: 'Alloy', locale: 'AI'),
+  _VoiceOption(name: 'Ash', locale: 'AI'),
+  _VoiceOption(name: 'Ballad', locale: 'AI'),
+  _VoiceOption(name: 'Echo', locale: 'AI'),
+  _VoiceOption(name: 'Fable', locale: 'AI'),
+  _VoiceOption(name: 'Nova', locale: 'AI'),
+  _VoiceOption(name: 'Onyx', locale: 'AI'),
+  _VoiceOption(name: 'Sage', locale: 'AI'),
+  _VoiceOption(name: 'Shimmer', locale: 'AI'),
+  _VoiceOption(name: 'Verse', locale: 'AI'),
+];
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+}

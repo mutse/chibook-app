@@ -19,6 +19,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
     final settings = state.settings;
+    final cutoff = DateTime.now().subtract(Duration(days: _month ? 30 : 7));
+    final listenedSeconds = state.listeningRecords
+        .where((record) => record.updatedAt.isAfter(cutoff))
+        .fold<int>(0, (sum, record) => sum + record.listenedSeconds);
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -105,7 +109,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                       ),
                       Expanded(
                         child: _Stat(
-                          value: _month ? '28h' : '6.2h',
+                          value: _durationLabel(listenedSeconds),
                           label: '听书时长',
                         ),
                       ),
@@ -132,16 +136,16 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               _SettingTile(
                 icon: Icons.history,
                 title: '听书历史',
-                onTap: () => _message(
-                  context,
-                  state.activeAudioBookId == null ? '暂无听书历史' : '已记录最近的听书进度',
-                ),
+                value: state.listeningRecords.isEmpty
+                    ? null
+                    : '${state.listeningRecords.length}',
+                onTap: () => _showListeningHistory(context, ref),
               ),
               _SettingTile(
                 icon: Icons.cleaning_services_outlined,
                 title: '清理缓存',
-                value: '128 MB',
-                onTap: () => _message(context, '缓存已清理'),
+                value: '0 MB',
+                onTap: () => _message(context, '系统 TTS 不产生音频缓存'),
               ),
             ],
           ),
@@ -203,6 +207,12 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       ),
     );
   }
+}
+
+String _durationLabel(int seconds) {
+  if (seconds < 60) return '${seconds}s';
+  if (seconds < 3600) return '${seconds ~/ 60}m';
+  return '${(seconds / 3600).toStringAsFixed(1)}h';
 }
 
 class _Stat extends StatelessWidget {
@@ -368,6 +378,94 @@ Future<void> _showHighlights(BuildContext context, WidgetRef ref) async {
                                     .removeHighlight(item.id),
                                 icon: const Icon(Icons.delete_outline),
                               ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+Future<void> _showListeningHistory(BuildContext context, WidgetRef ref) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (context) => Consumer(
+      builder: (context, ref, _) {
+        final state = ref.watch(appControllerProvider);
+        final records = state.listeningRecords;
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * .68,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 12, 10),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '听书历史',
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: records.isEmpty
+                            ? null
+                            : () => ref
+                                  .read(appControllerProvider.notifier)
+                                  .clearListeningHistory(),
+                        child: const Text('清空'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: records.isEmpty
+                      ? const Center(child: Text('暂无听书历史'))
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: records.length,
+                          separatorBuilder: (_, _) => const Divider(),
+                          itemBuilder: (_, index) {
+                            final record = records[index];
+                            final books = state.books.where(
+                              (book) => book.id == record.bookId,
+                            );
+                            if (books.isEmpty) return const SizedBox.shrink();
+                            final book = books.first;
+                            if (book.chapters.isEmpty) {
+                              return ListTile(
+                                leading: const Icon(Icons.warning_amber),
+                                title: Text(book.title),
+                                subtitle: const Text('此书没有可播放章节'),
+                              );
+                            }
+                            final chapter = record.chapterIndex.clamp(
+                              0,
+                              book.chapters.length - 1,
+                            );
+                            return ListTile(
+                              leading: const Icon(Icons.headphones_outlined),
+                              title: Text(book.title),
+                              subtitle: Text(
+                                '${book.chapters[chapter].title} · ${_durationLabel(record.listenedSeconds)}',
+                              ),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                Navigator.pop(context);
+                                context.push('/player/${book.id}');
+                              },
                             );
                           },
                         ),

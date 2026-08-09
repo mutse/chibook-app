@@ -27,8 +27,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   int _chapter = 0;
   int _start = 0;
   int _end = 0;
+  PlaybackMode _mode = PlaybackMode.sequential;
   Timer? _sleepTimer;
-  Timer? _progressSaveTimer;
   String? _timerLabel;
 
   Book? get _book {
@@ -49,59 +49,97 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     Future.microtask(() async {
       final book = _book;
       if (book == null || book.chapters.isEmpty) return;
-      _chapter = book.chapterIndex.clamp(0, book.chapters.length - 1);
-      _speed = ref.read(appControllerProvider).ttsSettings.speed;
-      ref.read(appControllerProvider.notifier).setActiveAudio(book.id);
-      await ttsAudioHandler.loadBook(book, chapterIndex: _chapter);
-      await ttsAudioHandler.applySettings(
-        ref.read(appControllerProvider).ttsSettings,
+      final controller = ref.read(appControllerProvider.notifier);
+      final saved = controller.audioProgressFor(book.id);
+      _chapter = (saved?.chapterIndex ?? book.chapterIndex).clamp(
+        0,
+        book.chapters.length - 1,
       );
+      _start = _end =
+          saved?.characterOffset.clamp(
+            0,
+            book.chapters[_chapter].content.length,
+          ) ??
+          0;
+      _speed =
+          saved?.speed ?? ref.read(appControllerProvider).ttsSettings.speed;
+      _mode = saved?.mode ?? PlaybackMode.sequential;
+      ref.read(appControllerProvider.notifier).setActiveAudio(book.id);
       _playbackSubscription = ttsAudioHandler.playbackState.listen((value) {
         if (mounted) setState(() => _playing = value.playing);
       });
       _eventSubscription = ttsAudioHandler.customEvent.listen((event) {
-        if (!mounted || event is! Map) return;
+        if (!mounted || event is! Map || event['bookId'] != book.id) return;
         if (event['type'] == 'progress') {
           setState(() {
             _start = event['start'] as int? ?? 0;
             _end = event['end'] as int? ?? 0;
-          });
-          final chapterLength = book.chapters[_chapter].content.length;
-          final chapterFraction = chapterLength == 0
-              ? 0.0
-              : _end / chapterLength;
-          final overall = (_chapter + chapterFraction) / book.chapters.length;
-          _progressSaveTimer?.cancel();
-          _progressSaveTimer = Timer(const Duration(milliseconds: 800), () {
-            ref
-                .read(appControllerProvider.notifier)
-                .updateProgress(book.id, _chapter, overall.clamp(0, 1));
           });
         }
         if (event['type'] == 'chapter') {
           final next = event['chapter'] as int? ?? _chapter;
           setState(() {
             _chapter = next;
-            _start = 0;
-            _end = 0;
+            _start = event['start'] as int? ?? 0;
+            _end = event['end'] as int? ?? _start;
           });
-          ref
-              .read(appControllerProvider.notifier)
-              .updateProgress(book.id, next, (next + 1) / book.chapters.length);
         }
         if (event['type'] == 'sleepComplete') {
           setState(() => _timerLabel = null);
         }
+        if (event['type'] == 'mode') {
+          setState(() {
+            _mode = PlaybackMode.values.byName(event['mode'] as String);
+          });
+        }
+        if (event['type'] == 'error') {
+          final message = event['message']?.toString() ?? '播放失败';
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message)));
+        }
       });
+      if (ttsAudioHandler.currentBookId != book.id) {
+        await ttsAudioHandler.loadBook(
+          book,
+          chapterIndex: _chapter,
+          characterOffset: _end,
+          mode: _mode,
+        );
+        await ttsAudioHandler.applySettings(
+          ref.read(appControllerProvider).ttsSettings.copyWith(speed: _speed),
+        );
+      } else {
+        setState(() {
+          _chapter = ttsAudioHandler.currentChapter;
+          _start = _end = ttsAudioHandler.characterOffset;
+          _speed = ttsAudioHandler.speed;
+          _mode = ttsAudioHandler.mode;
+          _playing = ttsAudioHandler.playbackState.value.playing;
+        });
+      }
     });
   }
 
   @override
   void dispose() {
     _sleepTimer?.cancel();
-    _progressSaveTimer?.cancel();
     _playbackSubscription?.cancel();
     _eventSubscription?.cancel();
+    final book = _book;
+    if (book != null) {
+      unawaited(
+        ref
+            .read(appControllerProvider.notifier)
+            .saveAudioPosition(
+              bookId: book.id,
+              chapterIndex: _chapter,
+              characterOffset: _end,
+              speed: _speed,
+              mode: _mode,
+            ),
+      );
+    }
     _wave.dispose();
     super.dispose();
   }
@@ -169,7 +207,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                     ),
                   ),
                   IconButton(
-                    onPressed: () {},
+                    tooltip: '章节与播放顺序',
+                    onPressed: () => _showQueue(book),
                     icon: const Icon(
                       Icons.more_horiz,
                       color: Color(0xFFEDE7D8),
@@ -264,8 +303,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                     ),
                   ),
                   IconButton(
-                    tooltip: '后退约 10 秒',
-                    onPressed: () => ttsAudioHandler.seekByCharacters(-40),
+                    tooltip: '后退约 15 秒',
+                    onPressed: () => ttsAudioHandler.seekBySeconds(-15),
                     icon: const Icon(
                       Icons.replay_10_rounded,
                       color: Color(0xFFEDE7D8),
@@ -285,8 +324,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                     ),
                   ),
                   IconButton(
-                    tooltip: '前进约 10 秒',
-                    onPressed: () => ttsAudioHandler.seekByCharacters(40),
+                    tooltip: '前进约 15 秒',
+                    onPressed: () => ttsAudioHandler.seekBySeconds(15),
                     icon: const Icon(
                       Icons.forward_10_rounded,
                       color: Color(0xFFEDE7D8),
@@ -314,6 +353,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                         onSelected: (_) {
                           setState(() => _speed = speed);
                           ttsAudioHandler.setSpeed(speed);
+                          ref
+                              .read(appControllerProvider.notifier)
+                              .saveAudioPosition(
+                                bookId: book.id,
+                                chapterIndex: _chapter,
+                                characterOffset: _end,
+                                speed: speed,
+                                mode: _mode,
+                              );
                         },
                         selectedColor: const Color(0xFFF2C9A0),
                         backgroundColor: Colors.transparent,
@@ -414,6 +462,96 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       }
     });
     setState(() => _timerLabel = '$minutes 分钟');
+  }
+
+  Future<void> _showQueue(Book book) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1E1C19),
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * .68,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '章节列表',
+                          style: TextStyle(
+                            color: Color(0xFFEDE7D8),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      DropdownButton<PlaybackMode>(
+                        value: _mode,
+                        dropdownColor: const Color(0xFF26231F),
+                        style: const TextStyle(color: Color(0xFFEDE7D8)),
+                        items: PlaybackMode.values
+                            .map(
+                              (mode) => DropdownMenuItem(
+                                value: mode,
+                                child: Text(switch (mode) {
+                                  PlaybackMode.sequential => '顺序播放',
+                                  PlaybackMode.reverse => '倒序播放',
+                                  PlaybackMode.repeatOne => '单章循环',
+                                }),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (mode) {
+                          if (mode == null) return;
+                          setState(() => _mode = mode);
+                          setSheetState(() {});
+                          ttsAudioHandler.setPlaybackMode(mode);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: book.chapters.length,
+                    itemBuilder: (_, index) => ListTile(
+                      selected: index == _chapter,
+                      selectedTileColor: Colors.white10,
+                      leading: Text(
+                        '${index + 1}'.padLeft(2, '0'),
+                        style: TextStyle(
+                          color: index == _chapter
+                              ? const Color(0xFFF2C9A0)
+                              : const Color(0xFF9B9184),
+                        ),
+                      ),
+                      title: Text(
+                        book.chapters[index].title,
+                        style: TextStyle(
+                          color: index == _chapter
+                              ? const Color(0xFFF2C9A0)
+                              : const Color(0xFFD8D0BE),
+                        ),
+                      ),
+                      onTap: () async {
+                        Navigator.pop(context);
+                        await ttsAudioHandler.playChapter(index);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

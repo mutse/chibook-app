@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../core/models.dart';
 import '../data/book_repository.dart';
+import '../services/cloud_tts_service.dart';
 
 final bookRepositoryProvider = Provider((ref) => BookRepository());
 
@@ -19,6 +20,8 @@ class AppState {
     this.isGrid = true,
     this.activeAudioBookId,
     this.highlights = const [],
+    this.audioProgress = const [],
+    this.listeningRecords = const [],
     this.recentSearches = const ['沈从文', '人间词话', '鲁迅', '瓦尔登湖'],
   });
 
@@ -29,6 +32,8 @@ class AppState {
   final bool isGrid;
   final String? activeAudioBookId;
   final List<Highlight> highlights;
+  final List<AudioProgress> audioProgress;
+  final List<ListeningRecord> listeningRecords;
   final List<String> recentSearches;
 
   AppState copyWith({
@@ -39,6 +44,8 @@ class AppState {
     bool? isGrid,
     String? activeAudioBookId,
     List<Highlight>? highlights,
+    List<AudioProgress>? audioProgress,
+    List<ListeningRecord>? listeningRecords,
     List<String>? recentSearches,
   }) => AppState(
     books: books ?? this.books,
@@ -48,13 +55,18 @@ class AppState {
     isGrid: isGrid ?? this.isGrid,
     activeAudioBookId: activeAudioBookId ?? this.activeAudioBookId,
     highlights: highlights ?? this.highlights,
+    audioProgress: audioProgress ?? this.audioProgress,
+    listeningRecords: listeningRecords ?? this.listeningRecords,
     recentSearches: recentSearches ?? this.recentSearches,
   );
 }
 
 class AppController extends Notifier<AppState> {
   static const _uuid = Uuid();
+  final Map<String, DateTime> _listeningTicks = {};
   BookRepository get _repository => ref.read(bookRepositoryProvider);
+  final _credentials = const TtsCredentialStore();
+  final _cloudTts = CloudTtsService();
 
   @override
   AppState build() {
@@ -68,12 +80,30 @@ class AppController extends Notifier<AppState> {
       _repository.loadSettings(),
       _repository.loadHighlights(),
       _repository.loadTtsSettings(),
+      _repository.loadAudioProgress(),
+      _repository.loadListeningRecords(),
     ]);
+    final books = values[0] as List<Book>;
+    final bookIds = books.map((book) => book.id).toSet();
+    final audioProgress = (values[4] as List<AudioProgress>)
+        .where((value) => bookIds.contains(value.bookId))
+        .toList();
+    final listeningRecords = (values[5] as List<ListeningRecord>)
+        .where((value) => bookIds.contains(value.bookId))
+        .toList();
+    var ttsSettings = values[3] as TtsSettings;
+    if (ttsSettings.apiKey.isNotEmpty) {
+      await _credentials.writeOpenAiKey(ttsSettings.apiKey);
+      ttsSettings = ttsSettings.copyWith(clearApiKey: true);
+      await _repository.saveTtsSettings(ttsSettings);
+    }
     state = state.copyWith(
-      books: values[0] as List<Book>,
+      books: books,
       settings: values[1] as ReaderSettings,
       highlights: values[2] as List<Highlight>,
-      ttsSettings: values[3] as TtsSettings,
+      ttsSettings: ttsSettings,
+      audioProgress: audioProgress,
+      listeningRecords: listeningRecords,
       initialized: true,
     );
   }
@@ -95,11 +125,20 @@ class AppController extends Notifier<AppState> {
       highlights: state.highlights
           .where((highlight) => highlight.bookId != id)
           .toList(),
+      audioProgress: state.audioProgress
+          .where((progress) => progress.bookId != id)
+          .toList(),
+      listeningRecords: state.listeningRecords
+          .where((record) => record.bookId != id)
+          .toList(),
     );
     await Future.wait([
       _repository.saveBooks(state.books),
       _repository.saveHighlights(state.highlights),
+      _repository.saveAudioProgress(state.audioProgress),
+      _repository.saveListeningRecords(state.listeningRecords),
       if (removed != null) _repository.deleteBookFile(removed),
+      if (removed != null) _cloudTts.clearCache(bookId: removed.id),
     ]);
   }
 
@@ -110,11 +149,20 @@ class AppController extends Notifier<AppState> {
       highlights: state.highlights
           .where((highlight) => !ids.contains(highlight.bookId))
           .toList(),
+      audioProgress: state.audioProgress
+          .where((progress) => !ids.contains(progress.bookId))
+          .toList(),
+      listeningRecords: state.listeningRecords
+          .where((record) => !ids.contains(record.bookId))
+          .toList(),
     );
     await Future.wait([
       _repository.saveBooks(state.books),
       _repository.saveHighlights(state.highlights),
+      _repository.saveAudioProgress(state.audioProgress),
+      _repository.saveListeningRecords(state.listeningRecords),
       ...removed.map(_repository.deleteBookFile),
+      ...removed.map((book) => _cloudTts.clearCache(bookId: book.id)),
     ]);
   }
 
@@ -154,12 +202,75 @@ class AppController extends Notifier<AppState> {
   }
 
   Future<void> setTtsSettings(TtsSettings value) async {
-    state = state.copyWith(ttsSettings: value);
-    await _repository.saveTtsSettings(value);
+    if (value.provider == TtsProvider.openai || value.apiKey.isNotEmpty) {
+      await _credentials.writeOpenAiKey(value.apiKey);
+    }
+    final safeValue = value.copyWith(clearApiKey: true);
+    state = state.copyWith(ttsSettings: safeValue);
+    await _repository.saveTtsSettings(safeValue);
   }
 
   void setActiveAudio(String id) =>
       state = state.copyWith(activeAudioBookId: id);
+
+  AudioProgress? audioProgressFor(String bookId) =>
+      state.audioProgress.where((value) => value.bookId == bookId).firstOrNull;
+
+  Future<void> saveAudioPosition({
+    required String bookId,
+    required int chapterIndex,
+    required int characterOffset,
+    required double speed,
+    required PlaybackMode mode,
+    bool countListening = false,
+  }) async {
+    final now = DateTime.now();
+    final progress = AudioProgress(
+      bookId: bookId,
+      chapterIndex: chapterIndex,
+      characterOffset: characterOffset,
+      speed: speed,
+      updatedAt: now,
+      mode: mode,
+    );
+    final progressValues = [
+      progress,
+      ...state.audioProgress.where((value) => value.bookId != bookId),
+    ];
+    var records = state.listeningRecords;
+    if (countListening) {
+      final previousTick = _listeningTicks[bookId];
+      _listeningTicks[bookId] = now;
+      final added = previousTick == null
+          ? 0
+          : now.difference(previousTick).inSeconds.clamp(0, 10);
+      final existing = records
+          .where((value) => value.bookId == bookId)
+          .firstOrNull;
+      final record = ListeningRecord(
+        bookId: bookId,
+        chapterIndex: chapterIndex,
+        characterOffset: characterOffset,
+        listenedSeconds: (existing?.listenedSeconds ?? 0) + added,
+        updatedAt: now,
+      );
+      records = [record, ...records.where((value) => value.bookId != bookId)];
+    }
+    state = state.copyWith(
+      audioProgress: progressValues,
+      listeningRecords: records,
+    );
+    await Future.wait([
+      _repository.saveAudioProgress(progressValues),
+      if (countListening) _repository.saveListeningRecords(records),
+    ]);
+  }
+
+  Future<void> clearListeningHistory() async {
+    _listeningTicks.clear();
+    state = state.copyWith(listeningRecords: const []);
+    await _repository.saveListeningRecords(const []);
+  }
 
   void addSearch(String query) {
     final value = query.trim();
