@@ -24,7 +24,7 @@ class _SplashPageState extends State<SplashPage>
       duration: const Duration(milliseconds: 850),
     )..forward();
     Timer(const Duration(milliseconds: 1500), () {
-      if (mounted) context.go('/shelf');
+      if (mounted) context.go('/reading');
     });
   }
 
@@ -85,7 +85,7 @@ class _SplashPageState extends State<SplashPage>
         Positioned(
           bottom: 48,
           child: OutlinedButton(
-            onPressed: () => context.go('/shelf'),
+            onPressed: () => context.go('/reading'),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFFEDE7D8),
               side: const BorderSide(color: Colors.white30),

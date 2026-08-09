@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +8,7 @@ import 'package:pdfrx/pdfrx.dart';
 import '../../app/app_state.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
+import '../../services/tts_audio_handler.dart';
 
 class ReaderPage extends ConsumerWidget {
   const ReaderPage({required this.bookId, super.key});
@@ -36,6 +39,13 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   late final PageController _pages;
   late int _chapter;
   bool _chrome = false;
+  bool _playing = false;
+  int? _spokenChapter;
+  int _spokenStart = 0;
+  int _spokenEnd = 0;
+  int? _targetChapter;
+  StreamSubscription? _playbackSubscription;
+  StreamSubscription? _eventSubscription;
 
   @override
   void initState() {
@@ -45,10 +55,21 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
       widget.book.chapters.length - 1,
     );
     _pages = PageController(initialPage: _chapter);
+    if (ttsAudioHandler.currentBookId == widget.book.id) {
+      _spokenChapter = ttsAudioHandler.currentChapter;
+      _spokenStart = _spokenEnd = ttsAudioHandler.characterOffset;
+      _playing = ttsAudioHandler.playbackState.value.playing;
+    }
+    _playbackSubscription = ttsAudioHandler.playbackState.listen((state) {
+      if (mounted) setState(() => _playing = state.playing);
+    });
+    _eventSubscription = ttsAudioHandler.customEvent.listen(_handleAudioEvent);
   }
 
   @override
   void dispose() {
+    _playbackSubscription?.cancel();
+    _eventSubscription?.cancel();
     _pages.dispose();
     super.dispose();
   }
@@ -94,7 +115,10 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                 controller: _pages,
                 itemCount: widget.book.chapters.length,
                 onPageChanged: (index) {
-                  setState(() => _chapter = index);
+                  setState(() {
+                    _chapter = index;
+                    if (_targetChapter == index) _targetChapter = null;
+                  });
                   ref
                       .read(appControllerProvider.notifier)
                       .updateProgress(
@@ -111,6 +135,9 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                   color: foreground,
                   page: index + 1,
                   count: widget.book.chapters.length,
+                  spokenStart: _spokenChapter == index ? _spokenStart : null,
+                  spokenEnd: _spokenChapter == index ? _spokenEnd : null,
+                  autoFollow: _playing && _spokenChapter == index,
                 ),
               ),
             ),
@@ -148,10 +175,41 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                 label: const Text('听书'),
               ),
             ),
+            if (_playing && _spokenChapter != null)
+              Positioned(
+                top: MediaQuery.paddingOf(context).top + 10,
+                right: 16,
+                child: const IgnorePointer(child: _FollowingBadge()),
+              ),
           ],
         ),
       ),
     );
+  }
+
+  void _handleAudioEvent(dynamic event) {
+    if (!mounted || event is! Map || event['bookId'] != widget.book.id) return;
+    if (!{'progress', 'chapter'}.contains(event['type'])) return;
+    final chapter = (event['chapter'] as int? ?? _spokenChapter ?? 0).clamp(
+      0,
+      widget.book.chapters.length - 1,
+    );
+    setState(() {
+      _spokenChapter = chapter;
+      _spokenStart = event['start'] as int? ?? _spokenStart;
+      _spokenEnd = event['end'] as int? ?? _spokenEnd;
+    });
+    if (_playing && chapter != _chapter && chapter != _targetChapter) {
+      _targetChapter = chapter;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_pages.hasClients || !_playing) return;
+        _pages.animateToPage(
+          chapter,
+          duration: const Duration(milliseconds: 360),
+          curve: Curves.easeInOutCubic,
+        );
+      });
+    }
   }
 
   void _showContents() {
@@ -193,7 +251,7 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   }
 }
 
-class _ChapterPage extends StatelessWidget {
+class _ChapterPage extends StatefulWidget {
   const _ChapterPage({
     required this.bookId,
     required this.chapter,
@@ -202,6 +260,9 @@ class _ChapterPage extends StatelessWidget {
     required this.color,
     required this.page,
     required this.count,
+    required this.spokenStart,
+    required this.spokenEnd,
+    required this.autoFollow,
   });
   final String bookId;
   final Chapter chapter;
@@ -210,6 +271,41 @@ class _ChapterPage extends StatelessWidget {
   final Color color;
   final int page;
   final int count;
+  final int? spokenStart;
+  final int? spokenEnd;
+  final bool autoFollow;
+
+  @override
+  State<_ChapterPage> createState() => _ChapterPageState();
+}
+
+class _ChapterPageState extends State<_ChapterPage> {
+  final ScrollController _scroll = ScrollController();
+  Timer? _followTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoFollow) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleFollow());
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChapterPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.autoFollow &&
+        (widget.spokenEnd != oldWidget.spokenEnd || !oldWidget.autoFollow)) {
+      _scheduleFollow();
+    }
+  }
+
+  @override
+  void dispose() {
+    _followTimer?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -217,32 +313,33 @@ class _ChapterPage extends StatelessWidget {
     child: Column(
       children: [
         Text(
-          chapter.title,
+          widget.chapter.title,
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: color,
+            color: widget.color,
             fontWeight: FontWeight.w800,
-            fontSize: settings.fontSize + 2,
+            fontSize: widget.settings.fontSize + 2,
           ),
         ),
         const SizedBox(height: 24),
         Expanded(
           child: SingleChildScrollView(
-            child: SelectableText(
-              chapter.content,
+            controller: _scroll,
+            child: SelectableText.rich(
+              _textSpan(),
               contextMenuBuilder: (context, editableState) {
                 final selection = editableState.textEditingValue.selection;
                 Future<void> save({required bool withNote}) async {
                   if (!selection.isValid || selection.isCollapsed) return;
                   final start = selection.start.clamp(
                     0,
-                    chapter.content.length,
+                    widget.chapter.content.length,
                   );
                   final end = selection.end.clamp(
                     start,
-                    chapter.content.length,
+                    widget.chapter.content.length,
                   );
-                  final excerpt = chapter.content.substring(start, end);
+                  final excerpt = widget.chapter.content.substring(start, end);
                   String? note;
                   if (withNote) {
                     note = await _requestNote(context);
@@ -251,10 +348,10 @@ class _ChapterPage extends StatelessWidget {
                   await ProviderScope.containerOf(context)
                       .read(appControllerProvider.notifier)
                       .addHighlight(
-                        bookId: bookId,
+                        bookId: widget.bookId,
                         excerpt: excerpt,
                         location: ReadingLocation.text(
-                          chapterIndex: chapterIndex,
+                          chapterIndex: widget.chapterIndex,
                           startOffset: start,
                           endOffset: end,
                         ),
@@ -283,20 +380,94 @@ class _ChapterPage extends StatelessWidget {
                   ],
                 );
               },
-              style: TextStyle(
-                color: color,
-                fontSize: settings.fontSize,
-                height: settings.lineHeight,
-                letterSpacing: .35,
-              ),
             ),
           ),
         ),
         Text(
-          '$page / $count',
-          style: TextStyle(color: color.withValues(alpha: .52), fontSize: 10),
+          '${widget.page} / ${widget.count}',
+          style: TextStyle(
+            color: widget.color.withValues(alpha: .52),
+            fontSize: 10,
+          ),
         ),
       ],
+    ),
+  );
+
+  TextSpan _textSpan() {
+    final text = widget.chapter.content;
+    final baseStyle = TextStyle(
+      color: widget.color,
+      fontSize: widget.settings.fontSize,
+      height: widget.settings.lineHeight,
+      letterSpacing: .35,
+    );
+    final start = (widget.spokenStart ?? 0).clamp(0, text.length);
+    final end = (widget.spokenEnd ?? start).clamp(start, text.length);
+    if (end <= start) return TextSpan(text: text, style: baseStyle);
+    return TextSpan(
+      style: baseStyle,
+      children: [
+        if (start > 0) TextSpan(text: text.substring(0, start)),
+        TextSpan(
+          text: text.substring(start, end),
+          style: TextStyle(
+            backgroundColor: AppColors.seal.withValues(alpha: .32),
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        if (end < text.length) TextSpan(text: text.substring(end)),
+      ],
+    );
+  }
+
+  void _scheduleFollow() {
+    _followTimer?.cancel();
+    _followTimer = Timer(const Duration(milliseconds: 80), () {
+      if (!mounted || !_scroll.hasClients || !widget.autoFollow) return;
+      final length = widget.chapter.content.length;
+      if (length == 0) return;
+      final fraction = ((widget.spokenEnd ?? 0) / length).clamp(0.0, 1.0);
+      final position = _scroll.position;
+      final target =
+          (position.maxScrollExtent * fraction -
+                  position.viewportDimension * .32)
+              .clamp(0.0, position.maxScrollExtent);
+      _scroll.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+}
+
+class _FollowingBadge extends StatelessWidget {
+  const _FollowingBadge();
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: AppColors.bamboo.withValues(alpha: .92),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.graphic_eq, size: 15, color: Colors.white),
+          SizedBox(width: 5),
+          Text(
+            '自动跟读',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -600,8 +771,39 @@ class PdfReaderPage extends ConsumerStatefulWidget {
 
 class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
   int _pageCount = 1;
+  final PdfViewerController _pdfController = PdfViewerController();
+  StreamSubscription? _playbackSubscription;
+  StreamSubscription? _eventSubscription;
+  bool _playing = false;
+  int? _spokenPage;
+  int? _lastFollowedPage;
+  int _spokenStart = 0;
+  int _spokenEnd = 0;
 
   Book get book => widget.book;
+
+  @override
+  void initState() {
+    super.initState();
+    if (ttsAudioHandler.currentBookId == book.id) {
+      _playing = ttsAudioHandler.playbackState.value.playing;
+      _spokenPage = ttsAudioHandler.currentChapter;
+      _spokenStart = _spokenEnd = ttsAudioHandler.characterOffset;
+    }
+    _playbackSubscription = ttsAudioHandler.playbackState.listen((state) {
+      if (!mounted) return;
+      setState(() => _playing = state.playing);
+      if (state.playing) _followSpokenPage();
+    });
+    _eventSubscription = ttsAudioHandler.customEvent.listen(_handleAudioEvent);
+  }
+
+  @override
+  void dispose() {
+    _playbackSubscription?.cancel();
+    _eventSubscription?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -629,11 +831,14 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
             children: [
               PdfViewer.file(
                 book.filePath!,
+                controller: _pdfController,
                 initialPageNumber: book.chapterIndex + 1,
                 params: PdfViewerParams(
                   onViewerReady: (document, _) {
                     if (mounted) {
                       setState(() => _pageCount = document.pages.length);
+                      _lastFollowedPage = null;
+                      _followSpokenPage();
                     }
                   },
                   onPageChanged: (pageNumber) {
@@ -661,7 +866,9 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'PDF 为固定版式：支持缩放与翻页，不提供字号和行距调整。',
+                            _playing && _spokenPage != null
+                                ? _spokenPreview()
+                                : 'PDF 为固定版式：支持缩放与翻页，不提供字号和行距调整。',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
@@ -673,4 +880,44 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
             ],
           ),
   );
+
+  void _handleAudioEvent(dynamic event) {
+    if (!mounted || event is! Map || event['bookId'] != book.id) return;
+    if (!{'progress', 'chapter'}.contains(event['type'])) return;
+    setState(() {
+      _spokenPage = (event['chapter'] as int? ?? _spokenPage ?? 0).clamp(
+        0,
+        book.chapters.length - 1,
+      );
+      _spokenStart = event['start'] as int? ?? _spokenStart;
+      _spokenEnd = event['end'] as int? ?? _spokenEnd;
+    });
+    _followSpokenPage();
+  }
+
+  void _followSpokenPage() {
+    if (!_playing || _spokenPage == null || !_pdfController.isReady) return;
+    if (_lastFollowedPage == _spokenPage) return;
+    _lastFollowedPage = _spokenPage;
+    unawaited(
+      _pdfController.goToPage(
+        pageNumber: _spokenPage! + 1,
+        duration: const Duration(milliseconds: 360),
+      ),
+    );
+  }
+
+  String _spokenPreview() {
+    final page = _spokenPage;
+    if (page == null || page < 0 || page >= book.chapters.length) {
+      return '自动跟读';
+    }
+    final text = book.chapters[page].content;
+    if (text.isEmpty) return '自动跟读 · 第 ${page + 1} 页';
+    final center = _spokenEnd.clamp(0, text.length);
+    final start = (center - 18).clamp(0, text.length);
+    final end = (center + 36).clamp(start, text.length);
+    final excerpt = text.substring(start, end).replaceAll('\n', ' ');
+    return '自动跟读 · 第 ${page + 1} 页\n$excerpt';
+  }
 }

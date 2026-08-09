@@ -182,7 +182,96 @@
   .splash-hint{position:absolute;bottom:34px;font-size:10px;color:#7d7364;}
 
   /* =========================================================
-     2. BOOKSHELF
+     2. READING HOME
+  ==========================================================*/
+  .reading-home{background:linear-gradient(180deg,#F4EFE6 0%,#EEE8DD 100%);}
+  .reading-home-head{
+    padding:14px 18px 10px;display:flex;align-items:flex-start;justify-content:space-between;
+  }
+  .reading-kicker{font-size:10px;color:var(--seal);font-weight:700;letter-spacing:.12em;}
+  .reading-title{font-family:"Noto Serif SC",serif;font-size:21px;font-weight:700;margin-top:3px;}
+  .reading-date{font-size:10px;color:var(--graphite);line-height:1.6;text-align:right;}
+  .reading-home-scroll{flex:1;overflow-y:auto;padding:2px 18px 92px;}
+  .continue-card{
+    position:relative;overflow:hidden;border-radius:18px;padding:17px;
+    background:linear-gradient(145deg,#26372F,#17241E);color:#F5F0E5;
+    box-shadow:0 14px 28px -16px rgba(31,48,40,.72);
+  }
+  .continue-card::after{
+    content:"读";position:absolute;right:-8px;bottom:-32px;
+    font-family:"Noto Serif SC",serif;font-size:118px;font-weight:700;
+    color:rgba(255,255,255,.045);transform:rotate(-8deg);
+  }
+  .continue-label{font-size:9.5px;color:#BFD0C5;letter-spacing:.1em;font-weight:700;}
+  .continue-main{display:flex;gap:13px;margin-top:12px;position:relative;z-index:1;}
+  .continue-cover{
+    width:60px;height:82px;border-radius:6px;flex-shrink:0;
+    background:linear-gradient(160deg,#A54E38,#5F241A);padding:9px 7px;
+    font-family:"Noto Serif SC",serif;font-size:12px;font-weight:700;
+    display:flex;align-items:flex-end;box-shadow:0 8px 16px -8px #000;
+  }
+  .continue-info{min-width:0;flex:1;}
+  .continue-book{font-family:"Noto Serif SC",serif;font-size:16px;font-weight:700;}
+  .continue-chapter{font-size:10.5px;color:#C9D3CC;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .continue-progress{height:3px;border-radius:3px;background:rgba(255,255,255,.16);margin-top:12px;overflow:hidden;}
+  .continue-progress span{display:block;width:62%;height:100%;background:#E9BFA9;border-radius:inherit;}
+  .continue-foot{display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:9.5px;color:#AEBEB4;}
+  .continue-btn{
+    border:0;border-radius:999px;background:#F3E9D8;color:#25342D;
+    padding:7px 12px;font-family:inherit;font-size:10.5px;font-weight:700;cursor:pointer;
+  }
+  .home-section-head{display:flex;align-items:center;justify-content:space-between;margin:18px 1px 9px;}
+  .home-section-title{font-family:"Noto Serif SC",serif;font-size:14px;font-weight:700;}
+  .home-section-more{font-size:9.5px;color:var(--graphite);}
+  .today-card{
+    display:grid;grid-template-columns:repeat(3,1fr);background:rgba(250,247,239,.82);
+    border:1px solid var(--line);border-radius:14px;padding:12px 8px;
+  }
+  .today-item{text-align:center;border-right:1px solid var(--line);}
+  .today-item:last-child{border-right:0;}
+  .today-num{font-family:"Noto Serif SC",serif;font-size:16px;font-weight:700;color:var(--bamboo);}
+  .today-label{font-size:9px;color:var(--graphite);margin-top:2px;}
+  .home-listen-card{
+    display:flex;align-items:center;gap:11px;padding:12px;border-radius:14px;
+    background:var(--paper-card);border:1px solid var(--line);
+  }
+  .home-listen-seal{
+    width:42px;height:42px;border-radius:12px;background:var(--seal);color:#FFF2EA;
+    display:flex;align-items:center;justify-content:center;font-family:"Noto Serif SC",serif;font-weight:700;
+  }
+  .home-listen-copy{flex:1;min-width:0;}
+  .home-listen-title{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .home-listen-sub{font-size:9.5px;color:var(--graphite);margin-top:3px;}
+  .home-play{
+    width:34px;height:34px;border-radius:50%;border:0;background:var(--bamboo);color:#fff;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .home-recent{display:flex;gap:10px;overflow-x:auto;padding-bottom:3px;}
+  .home-recent-item{width:66px;flex:0 0 auto;cursor:pointer;}
+  .home-recent-cover{
+    width:66px;height:88px;border-radius:6px;padding:8px 7px;display:flex;align-items:flex-end;
+    color:#fff;font-family:"Noto Serif SC",serif;font-size:10px;font-weight:700;
+    box-shadow:0 7px 13px -8px rgba(20,18,14,.6);
+  }
+  .home-recent-name{font-size:9.5px;font-weight:600;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .quote-card{
+    position:relative;padding:13px 14px 13px 30px;background:rgba(228,233,227,.75);
+    border-radius:13px;color:var(--eye-ink);font-family:"Noto Serif SC",serif;
+    font-size:11.5px;line-height:1.7;
+  }
+  .quote-card::before{content:"“";position:absolute;left:10px;top:1px;font-size:30px;color:var(--bamboo);opacity:.55;}
+  .quote-from{font-family:"Noto Sans SC",sans-serif;font-size:9px;color:var(--graphite);margin-top:5px;text-align:right;}
+  .home-tabbar{
+    position:absolute;left:0;right:0;bottom:0;height:66px;padding:7px 22px 15px;
+    background:rgba(250,247,239,.96);border-top:1px solid var(--line);
+    display:flex;justify-content:space-around;z-index:12;backdrop-filter:blur(12px);
+  }
+  .home-tab{min-width:54px;display:flex;flex-direction:column;align-items:center;gap:3px;color:#8A8379;font-size:9px;cursor:pointer;}
+  .home-tab svg{width:20px;height:20px;}
+  .home-tab.active{color:var(--bamboo);font-weight:700;}
+
+  /* =========================================================
+     3. BOOKSHELF
   ==========================================================*/
   .shelf-top{
     padding:14px 18px 4px;
@@ -322,7 +411,7 @@
   .scrim.show{opacity:1;pointer-events:auto;}
 
   /* =========================================================
-     3. READER
+     4. READER
   ==========================================================*/
   .reader-screen{background:var(--paper);}
   .reader-screen[data-theme="dark"]{background:#1B1A17;}
@@ -424,7 +513,7 @@
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
   /* =========================================================
-     4. IMMERSIVE PLAYER
+     5. IMMERSIVE PLAYER
   ==========================================================*/
   .player-screen{
     background:radial-gradient(circle at 50% -10%, #2a2622, #121110 70%);
@@ -505,7 +594,7 @@
   .timer-opt.selected{color:#F2C9A0;font-weight:600;}
 
   /* =========================================================
-     5. SEARCH
+     6. SEARCH
   ==========================================================*/
   .search-top{padding:14px 18px 10px;flex-shrink:0;}
   .search-box{
@@ -535,7 +624,7 @@
   .search-empty-hint{display:none;font-size:11.5px;color:var(--graphite);text-align:center;margin-top:40px;}
 
   /* =========================================================
-     6. PROFILE / SETTINGS
+     7. PROFILE / SETTINGS
   ==========================================================*/
   .profile-scroll{flex:1;overflow-y:auto;padding:0 18px 26px;}
   .profile-hero{
@@ -584,7 +673,7 @@
   .mini-swatch.eye{background:var(--eye);}
 
   /* =========================================================
-     7. TTS API SETTINGS
+     8. TTS API SETTINGS
   ==========================================================*/
   .provider-card{
     border:1px solid var(--line);border-radius:12px;
@@ -652,8 +741,8 @@
 
 <div class="lab-header">
   <div class="eyebrow">耳读 · ĚRDÚ — Interactive Prototype</div>
-  <h1>七屏并置原型</h1>
-  <p>点击各手机内的元素体验真实交互：书架视图切换、阅读器菜单与主题、听书播放控制、搜索联想、跨屏同步的主题设置，以及 TTS API 服务商配置与试听。所有交互均在本页面内实时生效，无需切页。</p>
+  <h1>八屏并置原型</h1>
+  <p>点击各手机内的元素体验真实交互：阅读首页的继续阅读与最近收听、书架视图切换、阅读器菜单与主题、听书播放控制、搜索联想、跨屏同步的主题设置，以及 TTS API 服务商配置与试听。所有交互均在本页面内实时生效，无需切页。</p>
 </div>
 
 <div class="gallery">
@@ -676,9 +765,116 @@
     </div>
   </div>
 
-  <!-- ============ 2. BOOKSHELF ============ -->
+  <!-- ============ 2. READING HOME ============ -->
   <div class="frame-wrap">
-    <div class="frame-label"><span class="no">2</span>书架</div>
+    <div class="frame-label"><span class="no">2</span>阅读首页</div>
+    <div class="phone">
+      <div class="screen reading-home" id="readingHomeScreen">
+        <div class="statusbar"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
+
+        <div class="reading-home-head">
+          <div>
+            <div class="reading-kicker">GOOD MORNING</div>
+            <div class="reading-title">继续阅读</div>
+          </div>
+          <div class="reading-date">八月初九<br>星期日</div>
+        </div>
+
+        <div class="reading-home-scroll">
+          <div class="continue-card">
+            <div class="continue-label">上次读到</div>
+            <div class="continue-main">
+              <div class="continue-cover">红楼梦</div>
+              <div class="continue-info">
+                <div class="continue-book">红楼梦</div>
+                <div class="continue-chapter">第三回　贾雨村夤缘复旧职</div>
+                <div class="continue-progress"><span></span></div>
+                <div class="continue-foot"><span>已读 62% · 8 分钟前</span></div>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;position:relative;z-index:2;margin-top:-5px;">
+              <button class="continue-btn" onclick="showToastOn('homeToast','已定位到第三回第 128 字')">继续阅读　›</button>
+            </div>
+          </div>
+
+          <div class="home-section-head">
+            <div class="home-section-title">今日</div>
+            <div class="home-section-more">连续阅读 12 天</div>
+          </div>
+          <div class="today-card">
+            <div class="today-item"><div class="today-num">32</div><div class="today-label">阅读分钟</div></div>
+            <div class="today-item"><div class="today-num">46</div><div class="today-label">听书分钟</div></div>
+            <div class="today-item"><div class="today-num">3</div><div class="today-label">完成章节</div></div>
+          </div>
+
+          <div class="home-section-head">
+            <div class="home-section-title">最近收听</div>
+            <div class="home-section-more" onclick="showToastOn('homeToast','打开听书历史')">全部 ›</div>
+          </div>
+          <div class="home-listen-card">
+            <div class="home-listen-seal">边</div>
+            <div class="home-listen-copy">
+              <div class="home-listen-title">边城 · 第一章 小溪与渡船</div>
+              <div class="home-listen-sub"><span class="wave-mini" id="homeWave" style="display:inline-flex;margin-right:5px;"><span></span><span></span><span></span></span><span id="homeListenState">05:12 · 1.0x</span></div>
+            </div>
+            <button class="home-play" onclick="toggleHomeListen()" aria-label="播放或暂停">
+              <svg id="homePlayIcon" viewBox="0 0 24 24" width="16" height="16"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+            </button>
+          </div>
+
+          <div class="home-section-head">
+            <div class="home-section-title">最近阅读</div>
+            <div class="home-section-more" onclick="showToastOn('homeToast','前往书架')">书架 ›</div>
+          </div>
+          <div class="home-recent">
+            <div class="home-recent-item" onclick="showToastOn('homeToast','继续阅读《人间词话》')">
+              <div class="home-recent-cover" style="background:linear-gradient(160deg,#6B655C,#2E2B26);">人间词话</div>
+              <div class="home-recent-name">人间词话</div>
+            </div>
+            <div class="home-recent-item" onclick="showToastOn('homeToast','继续阅读《瓦尔登湖》')">
+              <div class="home-recent-cover" style="background:linear-gradient(160deg,#3F5B4E,#20302A);">瓦尔登湖</div>
+              <div class="home-recent-name">瓦尔登湖</div>
+            </div>
+            <div class="home-recent-item" onclick="showToastOn('homeToast','继续阅读《乡土中国》')">
+              <div class="home-recent-cover" style="background:linear-gradient(160deg,#8B8378,#4A453D);">乡土中国</div>
+              <div class="home-recent-name">乡土中国</div>
+            </div>
+            <div class="home-recent-item" onclick="showToastOn('homeToast','继续阅读《呐喊》')">
+              <div class="home-recent-cover" style="background:linear-gradient(160deg,#C1442D,#7A2A1B);">呐喊</div>
+              <div class="home-recent-name">呐喊</div>
+            </div>
+          </div>
+
+          <div class="home-section-head"><div class="home-section-title">上次划线</div></div>
+          <div class="quote-card" onclick="showToastOn('homeToast','已定位到《红楼梦》原文')">
+            院中的海棠开得静默，无人问起，也无人叹惜。
+            <div class="quote-from">《红楼梦》· 第三回</div>
+          </div>
+        </div>
+
+        <div class="home-tabbar">
+          <div class="home-tab active">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H12v16H7.5A2.5 2.5 0 0 0 5 21.5v-16Z" stroke="currentColor" stroke-width="1.7"/><path d="M19 5.5A2.5 2.5 0 0 0 16.5 3H12v16h4.5a2.5 2.5 0 0 1 2.5 2.5v-16Z" stroke="currentColor" stroke-width="1.7"/></svg>
+            阅读
+          </div>
+          <div class="home-tab" onclick="showToastOn('homeToast','切换到书架')">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 5h4v14H4zM10 3h4v16h-4zM16 6h4v13h-4z" stroke="currentColor" stroke-width="1.7"/></svg>
+            书架
+          </div>
+          <div class="home-tab" onclick="showToastOn('homeToast','切换到我的')">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.7"/><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            我的
+          </div>
+        </div>
+        <div class="toast" id="homeToast"></div>
+        <div class="home-indicator"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 3. BOOKSHELF ============ -->
+  <div class="frame-wrap">
+    <div class="frame-label"><span class="no">3</span>书架</div>
     <div class="phone">
       <div class="screen" id="shelfScreen">
         <div class="statusbar"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
@@ -780,9 +976,9 @@
     </div>
   </div>
 
-  <!-- ============ 3. READER ============ -->
+  <!-- ============ 4. READER ============ -->
   <div class="frame-wrap">
-    <div class="frame-label"><span class="no">3</span>阅读器</div>
+    <div class="frame-label"><span class="no">4</span>阅读器</div>
     <div class="phone">
       <div class="screen reader-screen" id="readerScreen" data-theme="light" onclick="toggleReaderChrome(event)">
         <div class="statusbar" style="position:relative;z-index:1;"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
@@ -849,9 +1045,9 @@
     </div>
   </div>
 
-  <!-- ============ 4. IMMERSIVE PLAYER ============ -->
+  <!-- ============ 5. IMMERSIVE PLAYER ============ -->
   <div class="frame-wrap">
-    <div class="frame-label"><span class="no">4</span>沉浸式听书</div>
+    <div class="frame-label"><span class="no">5</span>沉浸式听书</div>
     <div class="phone">
       <div class="screen player-screen">
         <div class="player-top">
@@ -930,9 +1126,9 @@
     </div>
   </div>
 
-  <!-- ============ 5. SEARCH ============ -->
+  <!-- ============ 6. SEARCH ============ -->
   <div class="frame-wrap">
-    <div class="frame-label"><span class="no">5</span>搜索</div>
+    <div class="frame-label"><span class="no">6</span>搜索</div>
     <div class="phone">
       <div class="screen">
         <div class="statusbar"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
@@ -969,9 +1165,9 @@
     </div>
   </div>
 
-  <!-- ============ 6. PROFILE / SETTINGS ============ -->
+  <!-- ============ 7. PROFILE / SETTINGS ============ -->
   <div class="frame-wrap">
-    <div class="frame-label"><span class="no">6</span>个人中心 / 设置</div>
+    <div class="frame-label"><span class="no">7</span>个人中心 / 设置</div>
     <div class="phone">
       <div class="screen">
         <div class="statusbar"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
@@ -1015,9 +1211,9 @@
     </div>
   </div>
 
-  <!-- ============ 7. TTS API SETTINGS ============ -->
+  <!-- ============ 8. TTS API SETTINGS ============ -->
   <div class="frame-wrap">
-    <div class="frame-label"><span class="no">7</span>TTS API 设置</div>
+    <div class="frame-label"><span class="no">8</span>TTS API 设置</div>
     <div class="phone">
       <div class="screen">
         <div class="statusbar"><span>9:41</span><span>●●● ▂▃▅ 100%</span></div>
@@ -1133,7 +1329,7 @@
 <script>
   /* ---------- toast helper (per-frame) ---------- */
   function toast(msg){
-    const t = document.getElementById('shelfToast') || document.getElementById('readerToast');
+    showToastOn('homeToast', msg);
     showToastOn('shelfToast', msg);
     showToastOn('readerToast', msg);
   }
@@ -1146,7 +1342,19 @@
     el._t = setTimeout(()=>el.classList.remove('show'), 1600);
   }
 
-  /* ---------- 2. Bookshelf ---------- */
+  /* ---------- 2. Reading Home ---------- */
+  let homeListening = false;
+  function toggleHomeListen(){
+    homeListening = !homeListening;
+    document.getElementById('homePlayIcon').innerHTML = homeListening
+      ? '<rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor"/><rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor"/>'
+      : '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+    document.getElementById('homeWave').style.opacity = homeListening ? '1' : '.35';
+    document.getElementById('homeListenState').textContent = homeListening ? '正在播放 · 1.0x' : '05:12 · 1.0x';
+    showToastOn('homeToast', homeListening ? '继续播放《边城》' : '已暂停');
+  }
+
+  /* ---------- 3. Bookshelf ---------- */
   function setShelfView(view){
     const grid = document.getElementById('shelfGrid');
     const gridBtn = document.getElementById('gridBtn');
@@ -1192,7 +1400,7 @@
     }
   });
 
-  /* ---------- 3. Reader ---------- */
+  /* ---------- 4. Reader ---------- */
   let chromeOn = false;
   function toggleReaderChrome(e){
     if(e.target.closest('.hl') || e.target.closest('.reader-bottom') || e.target.closest('.reader-top') || e.target.closest('.listen-fab') || e.target.closest('.settings-sheet') || e.target.closest('.scrim')) return;
@@ -1233,7 +1441,7 @@
     showToastOn('readerToast', theme==='dark' ? '已切换夜间模式' : theme==='eye' ? '已切换护眼模式' : '已切换日间模式');
   }
 
-  /* ---------- 4. Immersive Player ---------- */
+  /* ---------- 5. Immersive Player ---------- */
   let playing = true;
   function togglePlay(){
     playing = !playing;
@@ -1265,7 +1473,7 @@
     setTimeout(closeTimerSheet, 350);
   }
 
-  /* ---------- 5. Search ---------- */
+  /* ---------- 6. Search ---------- */
   function doSearch(v){
     const recent = document.getElementById('recentBlock');
     const results = document.getElementById('resultsBlock');
@@ -1283,7 +1491,7 @@
     doSearch(v);
   }
 
-  /* ---------- 6. Profile ---------- */
+  /* ---------- 7. Profile ---------- */
   function setStatTab(el, mode){
     el.parentElement.querySelectorAll('.stat-tab').forEach(t=>t.classList.remove('active'));
     el.classList.add('active');
@@ -1294,7 +1502,7 @@
     document.getElementById('statB').textContent = data.b;
     document.getElementById('statC').textContent = data.c;
   }
-  /* ---------- 7. TTS API Settings ---------- */
+  /* ---------- 8. TTS API Settings ---------- */
   function pickProvider(el, key){
     document.querySelectorAll('.provider-card').forEach(c=>c.classList.remove('active'));
     el.classList.add('active');

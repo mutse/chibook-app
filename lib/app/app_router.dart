@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/models.dart';
+import '../features/home/reading_home_page.dart';
 import '../features/player/player_page.dart';
 import '../features/profile/profile_page.dart';
 import '../features/profile/tts_settings_page.dart';
@@ -26,6 +27,14 @@ final appRouter = GoRouter(
     StatefulShellRoute.indexedStack(
       builder: (context, state, shell) => AppShell(shell: shell),
       branches: [
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/reading',
+              builder: (_, _) => const ReadingHomePage(),
+            ),
+          ],
+        ),
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -192,6 +201,11 @@ class _AppShellState extends ConsumerState<AppShell> {
             selectedIndex: widget.shell.currentIndex,
             onDestinationSelected: (index) => widget.shell.goBranch(index),
             destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.menu_book_outlined),
+                selectedIcon: Icon(Icons.menu_book_rounded),
+                label: '阅读',
+              ),
               NavigationDestination(
                 icon: Icon(Icons.auto_stories_outlined),
                 selectedIcon: Icon(Icons.auto_stories),
