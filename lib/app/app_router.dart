@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/adaptive.dart';
 import '../core/models.dart';
 import '../features/home/reading_home_page.dart';
 import '../features/player/player_page.dart';
@@ -119,106 +120,156 @@ class _AppShellState extends ConsumerState<AppShell> {
     super.dispose();
   }
 
+  static const _destinations = [
+    (
+      icon: Icons.menu_book_outlined,
+      selected: Icons.menu_book_rounded,
+      label: '阅读',
+    ),
+    (
+      icon: Icons.auto_stories_outlined,
+      selected: Icons.auto_stories,
+      label: '书架',
+    ),
+    (icon: Icons.person_outline, selected: Icons.person, label: '我的'),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    final item = _mediaItem;
-    final bookId = item?.extras?['bookId'] as String?;
-    final progress = bookId == null
-        ? null
-        : ref.watch(
-            appControllerProvider.select(
-              (state) => state.audioProgress
-                  .where((value) => value.bookId == bookId)
-                  .firstOrNull,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 用约束宽度而不是屏幕宽度：iPad Split View 下窗口宽 != 屏幕宽，
+        // 用后者会把 1/3 分屏误判成大屏。
+        final form = formFactorOf(constraints.maxWidth);
+        final miniPlayer = _buildMiniPlayer(context);
+        if (!form.usesRail) {
+          return Scaffold(
+            body: widget.shell,
+            bottomNavigationBar: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ?miniPlayer,
+                NavigationBar(
+                  selectedIndex: widget.shell.currentIndex,
+                  onDestinationSelected: widget.shell.goBranch,
+                  destinations: [
+                    for (final item in _destinations)
+                      NavigationDestination(
+                        icon: Icon(item.icon),
+                        selectedIcon: Icon(item.selected),
+                        label: item.label,
+                      ),
+                  ],
+                ),
+              ],
             ),
           );
-    return Scaffold(
-      body: widget.shell,
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (item != null && bookId != null)
-            Material(
-              color: Theme.of(context).cardColor,
-              child: InkWell(
-                onTap: () => context.push('/player/$bookId'),
+        }
+        return Scaffold(
+          body: Row(
+            children: [
+              NavigationRail(
+                selectedIndex: widget.shell.currentIndex,
+                onDestinationSelected: widget.shell.goBranch,
+                // expanded 展开图标 + 文字，medium 只显示图标。
+                labelType: form == FormFactor.expanded
+                    ? NavigationRailLabelType.none
+                    : NavigationRailLabelType.selected,
+                extended: form == FormFactor.expanded,
+                minExtendedWidth: 168,
+                destinations: [
+                  for (final item in _destinations)
+                    NavigationRailDestination(
+                      icon: Icon(item.icon),
+                      selectedIcon: Icon(item.selected),
+                      label: Text(item.label),
+                    ),
+                ],
+              ),
+              const VerticalDivider(width: 1, thickness: 1),
+              Expanded(
                 child: Column(
                   children: [
-                    if (progress != null)
-                      LinearProgressIndicator(
-                        value: _chapterProgress(bookId, progress),
-                        minHeight: 2,
-                      ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
-                      child: Row(
-                        children: [
-                          const CircleAvatar(
-                            radius: 18,
-                            child: Icon(Icons.headphones, size: 18),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  item.album ?? '正在收听',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                Text(
-                                  item.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: _playing ? '暂停' : '继续播放',
-                            onPressed: _playing
-                                ? ttsAudioHandler.pause
-                                : ttsAudioHandler.play,
-                            icon: Icon(
-                              _playing
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    Expanded(child: widget.shell),
+                    // 迷你播放器在任何形态下都必须常驻可见可操作。
+                    if (miniPlayer != null)
+                      SafeArea(top: false, child: miniPlayer),
                   ],
                 ),
               ),
-            ),
-          NavigationBar(
-            selectedIndex: widget.shell.currentIndex,
-            onDestinationSelected: (index) => widget.shell.goBranch(index),
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.menu_book_outlined),
-                selectedIcon: Icon(Icons.menu_book_rounded),
-                label: '阅读',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.auto_stories_outlined),
-                selectedIcon: Icon(Icons.auto_stories),
-                label: '书架',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.person_outline),
-                selectedIcon: Icon(Icons.person),
-                label: '我的',
-              ),
             ],
           ),
-        ],
+        );
+      },
+    );
+  }
+
+  /// 迷你播放器在 compact 与 rail 两种形态下共用同一份实现，避免出现
+  /// 第二套播放状态。
+  Widget? _buildMiniPlayer(BuildContext context) {
+    final item = _mediaItem;
+    final bookId = item?.extras?['bookId'] as String?;
+    if (item == null || bookId == null) return null;
+    final progress = ref.watch(
+      appControllerProvider.select(
+        (state) =>
+            state.audioProgress.where((v) => v.bookId == bookId).firstOrNull,
+      ),
+    );
+    return Material(
+      color: Theme.of(context).cardColor,
+      child: InkWell(
+        onTap: () => context.push('/player/$bookId'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (progress != null)
+              LinearProgressIndicator(
+                value: _chapterProgress(bookId, progress),
+                minHeight: 2,
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
+              child: Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 18,
+                    child: Icon(Icons.headphones, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.album ?? '正在收听',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        Text(
+                          item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _playing ? '暂停' : '继续播放',
+                    onPressed: _playing
+                        ? ttsAudioHandler.pause
+                        : ttsAudioHandler.play,
+                    icon: Icon(
+                      _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

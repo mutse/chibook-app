@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/app_state.dart';
+import '../../core/adaptive.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../services/tts_audio_handler.dart';
@@ -57,9 +58,8 @@ class ShelfPage extends ConsumerWidget {
 
   Future<void> _showImport(BuildContext context, WidgetRef ref) async {
     var selectedFormat = BookFormat.txt;
-    final format = await showModalBottomSheet<BookFormat>(
+    final format = await showAdaptiveSheet<BookFormat>(
       context: context,
-      showDragHandle: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) => SafeArea(
           child: Padding(
@@ -168,8 +168,10 @@ class _BookGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) => GridView.builder(
     padding: const EdgeInsets.fromLTRB(18, 12, 18, 100),
-    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: 3,
+    // 按封面目标宽度推导列数，而不是写死 3 列：手机保持 3 列，
+    // iPad 竖屏约 5 列、横屏约 6-7 列，封面尺寸在各形态下保持一致。
+    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: 132,
       childAspectRatio: .57,
       crossAxisSpacing: 13,
       mainAxisSpacing: 18,
@@ -257,32 +259,42 @@ class _BookList extends ConsumerWidget {
   final List<Book> books;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => ListView.separated(
-    padding: const EdgeInsets.fromLTRB(18, 8, 18, 100),
-    itemCount: books.length,
-    separatorBuilder: (_, _) => const Divider(height: 24),
-    itemBuilder: (_, index) {
-      final book = books[index];
-      return ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: SizedBox(width: 54, height: 76, child: _BookCover(book: book)),
-        title: Text(
-          book.title,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-        subtitle: Text(
-          '${book.author}\n已读 ${(book.progress * 100).round()}%',
-          style: const TextStyle(height: 1.6),
-        ),
-        isThreeLine: true,
-        trailing: IconButton(
-          icon: const Icon(Icons.more_horiz),
-          onPressed: () => _bookMenu(context, ref, book),
-        ),
-        onTap: () => context.push('/reader/${book.id}'),
-        onLongPress: () => _showMultiSelect(context, ref, book.id),
-      );
-    },
+  Widget build(BuildContext context, WidgetRef ref) => Center(
+    // 大屏限宽，避免出现横贯整个 iPad 宽度的单行条目。
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: maxReadingColumnWidth),
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 100),
+        itemCount: books.length,
+        separatorBuilder: (_, _) => const Divider(height: 24),
+        itemBuilder: (_, index) {
+          final book = books[index];
+          return ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: SizedBox(
+              width: 54,
+              height: 76,
+              child: _BookCover(book: book),
+            ),
+            title: Text(
+              book.title,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            subtitle: Text(
+              '${book.author}\n已读 ${(book.progress * 100).round()}%',
+              style: const TextStyle(height: 1.6),
+            ),
+            isThreeLine: true,
+            trailing: IconButton(
+              icon: const Icon(Icons.more_horiz),
+              onPressed: () => _bookMenu(context, ref, book),
+            ),
+            onTap: () => context.push('/reader/${book.id}'),
+            onLongPress: () => _showMultiSelect(context, ref, book.id),
+          );
+        },
+      ),
+    ),
   );
 }
 
@@ -422,9 +434,8 @@ class _EmptyShelf extends StatelessWidget {
 }
 
 Future<void> _bookMenu(BuildContext context, WidgetRef ref, Book book) async {
-  final action = await showModalBottomSheet<String>(
+  final action = await showAdaptiveSheet<String>(
     context: context,
-    showDragHandle: true,
     builder: (context) => SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -465,99 +476,97 @@ Future<void> _showMultiSelect(
 ) async {
   final selected = <String>{initialId};
   final books = ref.read(appControllerProvider).books;
-  final action = await showModalBottomSheet<String>(
+  final action = await showAdaptiveSheet<String>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
+    scrollable: true,
     builder: (sheetContext) => StatefulBuilder(
       builder: (context, setModalState) => SafeArea(
-        child: SizedBox(
-          height: MediaQuery.sizeOf(context).height * .7,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 12, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '已选择 ${selected.length} 本',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 12, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '已选择 ${selected.length} 本',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                    TextButton(
-                      onPressed: () => setModalState(() {
-                        if (selected.length == books.length) {
-                          selected.clear();
-                        } else {
-                          selected.addAll(books.map((book) => book.id));
-                        }
-                      }),
-                      child: Text(
-                        selected.length == books.length ? '取消全选' : '全选',
-                      ),
+                  ),
+                  TextButton(
+                    onPressed: () => setModalState(() {
+                      if (selected.length == books.length) {
+                        selected.clear();
+                      } else {
+                        selected.addAll(books.map((book) => book.id));
+                      }
+                    }),
+                    child: Text(
+                      selected.length == books.length ? '取消全选' : '全选',
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              const Divider(height: 1),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: books.length,
-                  itemBuilder: (_, index) {
-                    final book = books[index];
-                    return CheckboxListTile(
-                      value: selected.contains(book.id),
-                      title: Text(book.title),
-                      subtitle: Text(book.author),
-                      secondary: Icon(
-                        book.format == BookFormat.pdf
-                            ? Icons.picture_as_pdf_outlined
-                            : Icons.menu_book_outlined,
-                      ),
-                      onChanged: (checked) => setModalState(() {
-                        checked == true
-                            ? selected.add(book.id)
-                            : selected.remove(book.id);
-                      }),
-                    );
-                  },
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: selected.isEmpty
-                            ? null
-                            : () => Navigator.pop(sheetContext, 'pin'),
-                        icon: const Icon(Icons.push_pin_outlined),
-                        label: const Text('置顶'),
-                      ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: books.length,
+                itemBuilder: (_, index) {
+                  final book = books[index];
+                  return CheckboxListTile(
+                    value: selected.contains(book.id),
+                    title: Text(book.title),
+                    subtitle: Text(book.author),
+                    secondary: Icon(
+                      book.format == BookFormat.pdf
+                          ? Icons.picture_as_pdf_outlined
+                          : Icons.menu_book_outlined,
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.seal,
-                        ),
-                        onPressed: selected.isEmpty
-                            ? null
-                            : () => Navigator.pop(sheetContext, 'delete'),
-                        icon: const Icon(Icons.delete_outline),
-                        label: const Text('删除'),
-                      ),
-                    ),
-                  ],
-                ),
+                    onChanged: (checked) => setModalState(() {
+                      checked == true
+                          ? selected.add(book.id)
+                          : selected.remove(book.id);
+                    }),
+                  );
+                },
               ),
-            ],
-          ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: selected.isEmpty
+                          ? null
+                          : () => Navigator.pop(sheetContext, 'pin'),
+                      icon: const Icon(Icons.push_pin_outlined),
+                      label: const Text('置顶'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.seal,
+                      ),
+                      onPressed: selected.isEmpty
+                          ? null
+                          : () => Navigator.pop(sheetContext, 'delete'),
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('删除'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     ),

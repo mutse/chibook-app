@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../app/app_state.dart';
+import '../../core/adaptive.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../services/tts_audio_handler.dart';
@@ -89,17 +90,56 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
     };
     return Scaffold(
       backgroundColor: background,
-      body: GestureDetector(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final form = formFactorOf(constraints.maxWidth);
+          final reader = _buildReadingSurface(
+            settings: settings,
+            foreground: foreground,
+            form: form,
+          );
+          if (!form.hasSidebar) return reader;
+          // 大屏常驻侧栏：目录与本书划线。
+          return Row(
+            children: [
+              SizedBox(
+                width: 296,
+                child: _ReaderSidebar(
+                  book: widget.book,
+                  currentChapter: _chapter,
+                  foreground: foreground,
+                  onSelectChapter: _jumpToChapter,
+                ),
+              ),
+              const VerticalDivider(width: 1, thickness: 1),
+              Expanded(child: reader),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildReadingSurface({
+    required ReaderSettings settings,
+    required Color foreground,
+    required FormFactor form,
+  }) => LayoutBuilder(
+    builder: (context, constraints) {
+      // 正文限宽后左右会留出页边距；翻页热区必须按正文列的实际边界划分，
+      // 否则大屏上点击页边距（甚至侧栏一侧）会误触翻页。
+      final columnWidth = readingColumnWidth(constraints.maxWidth);
+      final margin = (constraints.maxWidth - columnWidth) / 2;
+      return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) {
-          final width = MediaQuery.sizeOf(context).width;
-          if (details.localPosition.dx < width * .25 && _pages.hasClients) {
+          final dx = details.localPosition.dx - margin;
+          if (dx < columnWidth * .25 && _pages.hasClients) {
             _pages.previousPage(
               duration: const Duration(milliseconds: 260),
               curve: Curves.easeOut,
             );
-          } else if (details.localPosition.dx > width * .75 &&
-              _pages.hasClients) {
+          } else if (dx > columnWidth * .75 && _pages.hasClients) {
             _pages.nextPage(
               duration: const Duration(milliseconds: 260),
               curve: Curves.easeOut,
@@ -111,33 +151,40 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
         child: Stack(
           children: [
             SafeArea(
-              child: PageView.builder(
-                controller: _pages,
-                itemCount: widget.book.chapters.length,
-                onPageChanged: (index) {
-                  setState(() {
-                    _chapter = index;
-                    if (_targetChapter == index) _targetChapter = null;
-                  });
-                  ref
-                      .read(appControllerProvider.notifier)
-                      .updateProgress(
-                        widget.book.id,
-                        index,
-                        (index + 1) / widget.book.chapters.length,
-                      );
-                },
-                itemBuilder: (_, index) => _ChapterPage(
-                  bookId: widget.book.id,
-                  chapter: widget.book.chapters[index],
-                  chapterIndex: index,
-                  settings: settings,
-                  color: foreground,
-                  page: index + 1,
-                  count: widget.book.chapters.length,
-                  spokenStart: _spokenChapter == index ? _spokenStart : null,
-                  spokenEnd: _spokenChapter == index ? _spokenEnd : null,
-                  autoFollow: _playing && _spokenChapter == index,
+              child: Center(
+                child: SizedBox(
+                  width: columnWidth,
+                  child: PageView.builder(
+                    controller: _pages,
+                    itemCount: widget.book.chapters.length,
+                    onPageChanged: (index) {
+                      setState(() {
+                        _chapter = index;
+                        if (_targetChapter == index) _targetChapter = null;
+                      });
+                      ref
+                          .read(appControllerProvider.notifier)
+                          .updateProgress(
+                            widget.book.id,
+                            index,
+                            (index + 1) / widget.book.chapters.length,
+                          );
+                    },
+                    itemBuilder: (_, index) => _ChapterPage(
+                      bookId: widget.book.id,
+                      chapter: widget.book.chapters[index],
+                      chapterIndex: index,
+                      settings: settings,
+                      color: foreground,
+                      page: index + 1,
+                      count: widget.book.chapters.length,
+                      spokenStart: _spokenChapter == index
+                          ? _spokenStart
+                          : null,
+                      spokenEnd: _spokenChapter == index ? _spokenEnd : null,
+                      autoFollow: _playing && _spokenChapter == index,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -156,11 +203,14 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
               title: widget.book.chapters[_chapter].title,
               onBack: () => context.pop(),
               onContents: _showContents,
+              // 大屏侧栏已常驻，顶栏不再重复提供目录入口。
+              showContentsAction: !form.hasSidebar,
             ),
             _ReaderBottomBar(
               visible: _chrome,
               onContents: _showContents,
               onSettings: _showSettings,
+              showContents: !form.hasSidebar,
             ),
             AnimatedPositioned(
               duration: const Duration(milliseconds: 240),
@@ -183,7 +233,17 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
               ),
           ],
         ),
-      ),
+      );
+    },
+  );
+
+  /// 跳章统一入口：侧栏与目录弹层共用，避免出现两套跳转逻辑。
+  void _jumpToChapter(int index) {
+    if (!_pages.hasClients) return;
+    _pages.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
     );
   }
 
@@ -213,9 +273,9 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   }
 
   void _showContents() {
-    showModalBottomSheet<void>(
+    showAdaptiveSheet<void>(
       context: context,
-      showDragHandle: true,
+      scrollable: true,
       builder: (context) => SafeArea(
         child: ListView.builder(
           shrinkWrap: true,
@@ -230,11 +290,7 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                 : null,
             onTap: () {
               Navigator.pop(context);
-              _pages.animateToPage(
-                index,
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOut,
-              );
+              _jumpToChapter(index);
             },
           ),
         ),
@@ -243,9 +299,8 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   }
 
   void _showSettings() {
-    showModalBottomSheet<void>(
+    showAdaptiveSheet<void>(
       context: context,
-      showDragHandle: true,
       builder: (_) => const _ReaderSettingsSheet(),
     );
   }
@@ -442,6 +497,143 @@ class _ChapterPageState extends State<_ChapterPage> {
   }
 }
 
+/// 大屏常驻侧栏：目录 + 本书划线。
+///
+/// 选章走与目录弹层相同的 [_ReflowReaderPageState._jumpToChapter]，
+/// 不新增第二套跳转逻辑；朗读跟随翻章时选中项随 currentChapter 同步。
+class _ReaderSidebar extends ConsumerStatefulWidget {
+  const _ReaderSidebar({
+    required this.book,
+    required this.currentChapter,
+    required this.foreground,
+    required this.onSelectChapter,
+  });
+  final Book book;
+  final int currentChapter;
+  final Color foreground;
+  final ValueChanged<int> onSelectChapter;
+
+  @override
+  ConsumerState<_ReaderSidebar> createState() => _ReaderSidebarState();
+}
+
+class _ReaderSidebarState extends ConsumerState<_ReaderSidebar> {
+  bool _showNotes = false;
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final highlights = ref.watch(
+      appControllerProvider.select(
+        (state) => state.highlights
+            .where((item) => item.bookId == widget.book.id)
+            .toList(),
+      ),
+    );
+    return Column(
+      children: [
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: SegmentedButton<bool>(
+              segments: [
+                const ButtonSegment(value: false, label: Text('目录')),
+                ButtonSegment(
+                  value: true,
+                  label: Text(
+                    '划线 ${highlights.isEmpty ? '' : highlights.length}',
+                  ),
+                ),
+              ],
+              selected: {_showNotes},
+              showSelectedIcon: false,
+              onSelectionChanged: (value) =>
+                  setState(() => _showNotes = value.first),
+            ),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _showNotes ? _buildNotes(highlights) : _buildChapters(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChapters() => ListView.builder(
+    controller: _scroll,
+    itemCount: widget.book.chapters.length,
+    itemBuilder: (_, index) => ListTile(
+      dense: true,
+      selected: index == widget.currentChapter,
+      selectedColor: AppColors.seal,
+      leading: Text('${index + 1}'.padLeft(2, '0')),
+      title: Text(
+        widget.book.chapters[index].title,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: index == widget.currentChapter
+          ? const Icon(Icons.bookmark, size: 18, color: AppColors.seal)
+          : null,
+      onTap: () => widget.onSelectChapter(index),
+    ),
+  );
+
+  Widget _buildNotes(List<Highlight> highlights) {
+    if (highlights.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Text(
+            '本书还没有划线\n长按正文选择文字即可添加',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.graphite, fontSize: 12),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: highlights.length,
+      separatorBuilder: (_, _) => const Divider(height: 12),
+      itemBuilder: (_, index) {
+        final item = highlights[index];
+        final chapterIndex = item.location.chapterIndex;
+        return ListTile(
+          dense: true,
+          title: Text(
+            '“${item.excerpt}”',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12.5),
+          ),
+          subtitle: item.note == null
+              ? null
+              : Text(
+                  '笔记：${item.note}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11),
+                ),
+          onTap: chapterIndex == null
+              ? null
+              : () => widget.onSelectChapter(
+                  chapterIndex.clamp(0, widget.book.chapters.length - 1),
+                ),
+        );
+      },
+    );
+  }
+}
+
 class _FollowingBadge extends StatelessWidget {
   const _FollowingBadge();
 
@@ -478,11 +670,13 @@ class _ReaderTopBar extends StatelessWidget {
     required this.title,
     required this.onBack,
     required this.onContents,
+    this.showContentsAction = true,
   });
   final bool visible;
   final String title;
   final VoidCallback onBack;
   final VoidCallback onContents;
+  final bool showContentsAction;
 
   @override
   Widget build(BuildContext context) => AnimatedPositioned(
@@ -511,10 +705,13 @@ class _ReaderTopBar extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
-              IconButton(
-                onPressed: onContents,
-                icon: const Icon(Icons.more_horiz),
-              ),
+              if (showContentsAction)
+                IconButton(
+                  onPressed: onContents,
+                  icon: const Icon(Icons.more_horiz),
+                )
+              else
+                const SizedBox(width: 48),
             ],
           ),
         ),
@@ -528,10 +725,12 @@ class _ReaderBottomBar extends StatelessWidget {
     required this.visible,
     required this.onContents,
     required this.onSettings,
+    this.showContents = true,
   });
   final bool visible;
   final VoidCallback onContents;
   final VoidCallback onSettings;
+  final bool showContents;
 
   @override
   Widget build(BuildContext context) => AnimatedPositioned(
@@ -548,11 +747,12 @@ class _ReaderBottomBar extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _ReaderAction(
-                icon: Icons.format_list_bulleted,
-                label: '目录',
-                onTap: onContents,
-              ),
+              if (showContents)
+                _ReaderAction(
+                  icon: Icons.format_list_bulleted,
+                  label: '目录',
+                  onTap: onContents,
+                ),
               _ReaderAction(
                 icon: Icons.brightness_6_outlined,
                 label: '亮度',
@@ -827,58 +1027,98 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
     ),
     body: book.filePath == null
         ? const Center(child: Text('PDF 文件路径不可用'))
-        : Stack(
-            children: [
-              PdfViewer.file(
-                book.filePath!,
-                controller: _pdfController,
-                initialPageNumber: book.chapterIndex + 1,
-                params: PdfViewerParams(
-                  onViewerReady: (document, _) {
-                    if (mounted) {
-                      setState(() => _pageCount = document.pages.length);
-                      _lastFollowedPage = null;
-                      _followSpokenPage();
-                    }
-                  },
-                  onPageChanged: (pageNumber) {
-                    if (pageNumber == null) return;
-                    ref
-                        .read(appControllerProvider.notifier)
-                        .updateProgress(
-                          book.id,
-                          pageNumber - 1,
-                          (pageNumber / _pageCount).clamp(0, 1),
-                        );
-                  },
-                ),
-              ),
-              Positioned(
-                left: 14,
-                right: 14,
-                bottom: 14,
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _playing && _spokenPage != null
-                                ? _spokenPreview()
-                                : 'PDF 为固定版式：支持缩放与翻页，不提供字号和行距调整。',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ),
-                      ],
-                    ),
+        : LayoutBuilder(
+            builder: (context, constraints) {
+              final form = formFactorOf(constraints.maxWidth);
+              final viewer = _buildPdfViewer(book);
+              if (!form.hasSidebar) return viewer;
+              // PDF 侧栏只提供页码导航；固定版式不套用重排阅读器的字号/行距，
+              // 也不强行拼页——是否对开由 PDFium 的实际页面尺寸决定。
+              return Row(
+                children: [
+                  SizedBox(width: 220, child: _buildPageList()),
+                  const VerticalDivider(width: 1, thickness: 1),
+                  Expanded(child: viewer),
+                ],
+              );
+            },
+          ),
+  );
+
+  Widget _buildPageList() => ListView.builder(
+    itemCount: _pageCount,
+    itemBuilder: (_, index) {
+      final hasText =
+          index < book.chapters.length &&
+          book.chapters[index].content.trim().isNotEmpty;
+      return ListTile(
+        dense: true,
+        selected: _spokenPage == index,
+        selectedColor: AppColors.seal,
+        leading: Text('${index + 1}'),
+        title: Text(
+          hasText ? '第 ${index + 1} 页' : '第 ${index + 1} 页（无文本）',
+          style: TextStyle(
+            fontSize: 12.5,
+            color: hasText ? null : AppColors.graphite,
+          ),
+        ),
+        onTap: () => unawaited(_pdfController.goToPage(pageNumber: index + 1)),
+      );
+    },
+  );
+
+  Widget _buildPdfViewer(Book book) => Stack(
+    children: [
+      PdfViewer.file(
+        book.filePath!,
+        controller: _pdfController,
+        initialPageNumber: book.chapterIndex + 1,
+        params: PdfViewerParams(
+          onViewerReady: (document, _) {
+            if (mounted) {
+              setState(() => _pageCount = document.pages.length);
+              _lastFollowedPage = null;
+              _followSpokenPage();
+            }
+          },
+          onPageChanged: (pageNumber) {
+            if (pageNumber == null) return;
+            ref
+                .read(appControllerProvider.notifier)
+                .updateProgress(
+                  book.id,
+                  pageNumber - 1,
+                  (pageNumber / _pageCount).clamp(0, 1),
+                );
+          },
+        ),
+      ),
+      Positioned(
+        left: 14,
+        right: 14,
+        bottom: 14,
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _playing && _spokenPage != null
+                        ? _spokenPreview()
+                        : 'PDF 为固定版式：支持缩放与翻页，不提供字号和行距调整。',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
+        ),
+      ),
+    ],
   );
 
   void _handleAudioEvent(dynamic event) {

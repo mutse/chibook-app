@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
@@ -40,6 +41,11 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   TextChunk? _activeChunk;
   int _operation = 0;
   bool _handlingCloudCompletion = false;
+  Timer? _sleepTimer;
+  DateTime? _sleepDeadline;
+  bool _interruptedByFocus = false;
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
+  StreamSubscription<void>? _noisySubscription;
 
   String? get currentBookId => _book?.id;
   int get currentChapter => _chapter;
@@ -47,6 +53,10 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   double get speed => _speed;
   PlaybackMode get mode => _mode;
   bool get isCloud => _settings.provider == TtsProvider.openai;
+
+  /// 定时关闭状态由 handler 持有，页面重建后可据此恢复标签显示。
+  bool get stopsAfterCurrentChapter => _stopAfterCurrentChapter;
+  DateTime? get sleepDeadline => _sleepDeadline;
 
   Future<void> _initialize() async {
     await _tts.setLanguage('zh-CN');
@@ -90,7 +100,60 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
         );
       }
     });
+    await _configureAudioSession();
     _publish(playing: false);
+  }
+
+  /// 音频焦点、来电中断与拔耳机。
+  ///
+  /// `just_audio` 的 `handleInterruptions: true` 只覆盖云端 MP3 路径；
+  /// builtin（`flutter_tts`）路径没有任何打断处理，因此这里统一订阅
+  /// `audio_session` 的事件流，对两条引擎路径做同样的暂停/恢复决策。
+  Future<void> _configureAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.speech());
+      _interruptionSubscription = session.interruptionEventStream.listen(
+        _handleInterruption,
+      );
+      // 拔耳机 / 蓝牙断开：立即暂停，不允许转外放继续朗读。
+      _noisySubscription = session.becomingNoisyEventStream.listen((_) {
+        if (playbackState.value.playing) unawaited(pause());
+      });
+    } catch (_) {
+      // 平台不支持或配置失败时不影响正常播放，只是失去自动暂停能力。
+    }
+  }
+
+  void _handleInterruption(AudioInterruptionEvent event) {
+    if (event.begin) {
+      switch (event.type) {
+        case AudioInterruptionType.duck:
+          // 已声明 spokenAudio + duckOthers，让系统压低其他音频而不暂停朗读；
+          // 不自行降低音量，避免与系统 ducking 叠加。
+          break;
+        case AudioInterruptionType.pause:
+        case AudioInterruptionType.unknown:
+          if (playbackState.value.playing) {
+            _interruptedByFocus = true;
+            unawaited(_pauseEngines());
+          }
+      }
+      return;
+    }
+    switch (event.type) {
+      case AudioInterruptionType.duck:
+        break;
+      case AudioInterruptionType.pause:
+        // 短暂中断（来电结束等）结束后恢复。
+        if (_interruptedByFocus) {
+          _interruptedByFocus = false;
+          unawaited(play());
+        }
+      case AudioInterruptionType.unknown:
+        // 焦点可能已被永久让出，保持暂停，由用户决定何时继续。
+        _interruptedByFocus = false;
+    }
   }
 
   Future<void> loadBook(
@@ -165,8 +228,50 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
-  void stopAfterCurrentChapter(bool enabled) =>
-      _stopAfterCurrentChapter = enabled;
+  void stopAfterCurrentChapter(bool enabled) {
+    _stopAfterCurrentChapter = enabled;
+    if (enabled) _cancelSleepTimer();
+    _emitSleepState();
+  }
+
+  /// 定时关闭。[minutes] 为 null 表示取消倒计时。
+  void setSleepTimer(int? minutes) {
+    _cancelSleepTimer();
+    if (minutes == null) {
+      _stopAfterCurrentChapter = false;
+      _emitSleepState();
+      return;
+    }
+    _stopAfterCurrentChapter = false;
+    _sleepDeadline = DateTime.now().add(Duration(minutes: minutes));
+    _sleepTimer = Timer(Duration(minutes: minutes), () {
+      _sleepTimer = null;
+      _sleepDeadline = null;
+      unawaited(stop());
+      customEvent.add({
+        'type': 'sleepComplete',
+        'bookId': _book?.id,
+        'chapter': _chapter,
+      });
+    });
+    _emitSleepState();
+  }
+
+  void _cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepDeadline = null;
+  }
+
+  void _emitSleepState() {
+    customEvent.add({
+      'type': 'sleep',
+      'bookId': _book?.id,
+      'chapter': _chapter,
+      'stopAfterChapter': _stopAfterCurrentChapter,
+      'deadline': _sleepDeadline?.toIso8601String(),
+    });
+  }
 
   void setPlaybackMode(PlaybackMode mode) {
     _mode = mode;
@@ -178,6 +283,12 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> pause() async {
+    // 用户主动暂停：清除中断标记，避免之后焦点恢复时被误判为需要自动续播。
+    _interruptedByFocus = false;
+    await _pauseEngines();
+  }
+
+  Future<void> _pauseEngines() async {
     if (isCloud) {
       if (_activeChunk == null && playbackState.value.playing) {
         _operation++;
@@ -194,6 +305,8 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> stop() async {
     _operation++;
     _stopAfterCurrentChapter = false;
+    _cancelSleepTimer();
+    _interruptedByFocus = false;
     await _stopEngines();
     _publish(playing: false, state: AudioProcessingState.idle);
   }
@@ -289,7 +402,11 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     if (_settings.provider == TtsProvider.openai) {
       await _playCloudChunk();
     } else if (_settings.provider == TtsProvider.builtin) {
+      // builtin 路径同样需要 token 校验：setSpeechRate 之后若有新的
+      // seek/切章/中断恢复抢先执行，这次 speak 必须放弃，否则会复活旧位置。
+      final token = ++_operation;
       await _tts.setSpeechRate((_speed * .5).clamp(.1, 1.0));
+      if (token != _operation) return;
       _publish(playing: true, state: AudioProcessingState.ready);
       _speechStartOffset = _characterOffset;
       await _tts.speak(content.substring(_characterOffset));
@@ -383,7 +500,12 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     if (_stopAfterCurrentChapter) {
       _stopAfterCurrentChapter = false;
       _publish(playing: false, state: AudioProcessingState.completed);
-      customEvent.add({'type': 'sleepComplete', 'chapter': _chapter});
+      customEvent.add({
+        'type': 'sleepComplete',
+        // 所有监听方都按 bookId 过滤，缺了这个字段事件会被静默丢弃。
+        'bookId': book?.id,
+        'chapter': _chapter,
+      });
       return;
     }
     final nextChapter = switch (_mode) {
@@ -465,9 +587,38 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
           MediaControl.skipToNext,
         ],
         androidCompactActionIndices: const [0, 1, 3],
+        // 声明系统媒体控件可用的动作，否则锁屏/通知栏只有按钮没有可用的
+        // seek 与倍速入口。
+        systemActions: const {
+          MediaAction.seek,
+          MediaAction.seekForward,
+          MediaAction.seekBackward,
+          MediaAction.setSpeed,
+        },
         processingState: state,
         playing: playing,
+        speed: _speed,
+        updatePosition: _cloudPosition,
       ),
     );
+  }
+
+  /// 系统媒体控件的进度只在云端音频下有真实时间轴；builtin 朗读没有可用的
+  /// 时间位置，统一上报 0 而不是伪造一个由字符数换算的假时长。
+  Duration get _cloudPosition =>
+      isCloud && _activeChunk != null ? _cloudPlayer.position : Duration.zero;
+
+  @override
+  Future<void> onTaskRemoved() async {
+    await stop();
+    await super.onTaskRemoved();
+  }
+
+  /// 释放会话订阅。全局单例正常不会销毁，这里保证测试与热重载不泄漏。
+  Future<void> dispose() async {
+    _cancelSleepTimer();
+    await _interruptionSubscription?.cancel();
+    await _noisySubscription?.cancel();
+    await _cloudPlayer.dispose();
   }
 }

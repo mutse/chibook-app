@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/app_state.dart';
+import '../../core/adaptive.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../services/tts_audio_handler.dart';
@@ -67,93 +68,108 @@ class _ReadingHomePageState extends ConsumerState<ReadingHomePage> {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: CustomScrollView(
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(18, 10, 18, 6),
-              sliver: SliverToBoxAdapter(child: _Header(now: DateTime.now())),
+        child: Center(
+          // 大屏限宽居中：首页是纵向信息流，铺满 iPad 宽度会让每行过长。
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: maxReadingColumnWidth),
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 6),
+                  sliver: SliverToBoxAdapter(
+                    child: _Header(now: DateTime.now()),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
+                  sliver: SliverList.list(
+                    children: [
+                      _ContinueCard(
+                        book: continueBook,
+                        onTap: () => context.push('/reader/${continueBook.id}'),
+                      ),
+                      const SizedBox(height: 20),
+                      const _SectionHeader(title: '本机记录', trailing: '本地实时统计'),
+                      const SizedBox(height: 9),
+                      _StatsCard(
+                        progress: continueBook.progress,
+                        listeningSeconds: totalListeningSeconds,
+                        highlights: state.highlights.length,
+                      ),
+                      const SizedBox(height: 20),
+                      _SectionHeader(
+                        title: '最近收听',
+                        trailing: state.listeningRecords.isEmpty
+                            ? null
+                            : '听书历史',
+                        onTap: state.listeningRecords.isEmpty
+                            ? null
+                            : () => context.go('/profile'),
+                      ),
+                      const SizedBox(height: 9),
+                      if (listening == null)
+                        const _QuietCard(
+                          icon: Icons.headphones_outlined,
+                          text: '还没有听书记录，从一本书开始吧',
+                        )
+                      else
+                        _ListeningCard(
+                          book: listening.$1,
+                          chapterIndex: listening.$2,
+                          playing: _playing && _activeBookId == listening.$1.id,
+                          onOpen: () =>
+                              context.push('/player/${listening.$1.id}'),
+                          onToggle: () => _toggleListening(
+                            listening.$1,
+                            listening.$2,
+                            state,
+                          ),
+                        ),
+                      const SizedBox(height: 20),
+                      _SectionHeader(
+                        title: '最近阅读',
+                        trailing: '书架',
+                        onTap: () => context.go('/shelf'),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        height: 154,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: books.take(5).length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 12),
+                          itemBuilder: (_, index) {
+                            final book = books[index];
+                            return _RecentBook(
+                              book: book,
+                              onTap: () => context.push('/reader/${book.id}'),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      const _SectionHeader(title: '上次划线'),
+                      const SizedBox(height: 9),
+                      if (lastHighlight == null)
+                        const _QuietCard(
+                          icon: Icons.format_quote,
+                          text: '阅读时长按文字即可添加划线和笔记',
+                        )
+                      else
+                        _HighlightCard(
+                          highlight: lastHighlight,
+                          book: state.books
+                              .where((book) => book.id == lastHighlight.bookId)
+                              .firstOrNull,
+                          onTap: () =>
+                              _openHighlight(lastHighlight, state.books),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
-              sliver: SliverList.list(
-                children: [
-                  _ContinueCard(
-                    book: continueBook,
-                    onTap: () => context.push('/reader/${continueBook.id}'),
-                  ),
-                  const SizedBox(height: 20),
-                  const _SectionHeader(title: '本机记录', trailing: '本地实时统计'),
-                  const SizedBox(height: 9),
-                  _StatsCard(
-                    progress: continueBook.progress,
-                    listeningSeconds: totalListeningSeconds,
-                    highlights: state.highlights.length,
-                  ),
-                  const SizedBox(height: 20),
-                  _SectionHeader(
-                    title: '最近收听',
-                    trailing: state.listeningRecords.isEmpty ? null : '听书历史',
-                    onTap: state.listeningRecords.isEmpty
-                        ? null
-                        : () => context.go('/profile'),
-                  ),
-                  const SizedBox(height: 9),
-                  if (listening == null)
-                    const _QuietCard(
-                      icon: Icons.headphones_outlined,
-                      text: '还没有听书记录，从一本书开始吧',
-                    )
-                  else
-                    _ListeningCard(
-                      book: listening.$1,
-                      chapterIndex: listening.$2,
-                      playing: _playing && _activeBookId == listening.$1.id,
-                      onOpen: () => context.push('/player/${listening.$1.id}'),
-                      onToggle: () =>
-                          _toggleListening(listening.$1, listening.$2, state),
-                    ),
-                  const SizedBox(height: 20),
-                  _SectionHeader(
-                    title: '最近阅读',
-                    trailing: '书架',
-                    onTap: () => context.go('/shelf'),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 154,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: books.take(5).length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 12),
-                      itemBuilder: (_, index) {
-                        final book = books[index];
-                        return _RecentBook(
-                          book: book,
-                          onTap: () => context.push('/reader/${book.id}'),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  const _SectionHeader(title: '上次划线'),
-                  const SizedBox(height: 9),
-                  if (lastHighlight == null)
-                    const _QuietCard(
-                      icon: Icons.format_quote,
-                      text: '阅读时长按文字即可添加划线和笔记',
-                    )
-                  else
-                    _HighlightCard(
-                      highlight: lastHighlight,
-                      book: state.books
-                          .where((book) => book.id == lastHighlight.bookId)
-                          .firstOrNull,
-                      onTap: () => _openHighlight(lastHighlight, state.books),
-                    ),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

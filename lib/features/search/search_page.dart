@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/app_state.dart';
+import '../../core/adaptive.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 
@@ -70,70 +71,79 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         ),
         actions: const [SizedBox(width: 16)],
       ),
-      body: query.isEmpty
-          ? _RecentSearches(
-              values: state.recentSearches,
-              onTap: (value) {
-                _controller.text = value;
-                setState(() => _query = value);
-              },
-            )
-          : matches.isEmpty
-          ? const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.search_off_rounded,
-                    size: 54,
-                    color: AppColors.graphite,
-                  ),
-                  SizedBox(height: 12),
-                  Text(
-                    '未找到相关书籍，换个关键词试试',
-                    style: TextStyle(color: AppColors.graphite),
-                  ),
-                ],
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(18),
-              itemCount: matches.length,
-              separatorBuilder: (_, _) => const Divider(height: 22),
-              itemBuilder: (_, i) {
-                final book = matches[i];
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Container(
-                    width: 45,
-                    height: 62,
-                    decoration: BoxDecoration(
-                      color: Color(book.coverColor),
-                      borderRadius: BorderRadius.circular(5),
-                    ),
-                    alignment: Alignment.bottomLeft,
-                    padding: const EdgeInsets.all(6),
-                    child: Text(
-                      book.title.characters.first,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  title: Text(
-                    book.title,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: Text(book.author),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    ref.read(appControllerProvider.notifier).addSearch(_query);
-                    context.push('/reader/${book.id}');
+      // 大屏限宽：搜索结果行铺满 iPad 宽度会让书名和作者相距过远。
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: maxReadingColumnWidth),
+          child: query.isEmpty
+              ? _RecentSearches(
+                  values: state.recentSearches,
+                  onTap: (value) {
+                    _controller.text = value;
+                    setState(() => _query = value);
                   },
-                );
-              },
-            ),
+                )
+              : matches.isEmpty
+              ? const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.search_off_rounded,
+                        size: 54,
+                        color: AppColors.graphite,
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        '未找到相关书籍，换个关键词试试',
+                        style: TextStyle(color: AppColors.graphite),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.all(18),
+                  itemCount: matches.length,
+                  separatorBuilder: (_, _) => const Divider(height: 22),
+                  itemBuilder: (_, i) {
+                    final book = matches[i];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Container(
+                        width: 45,
+                        height: 62,
+                        decoration: BoxDecoration(
+                          color: Color(book.coverColor),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        alignment: Alignment.bottomLeft,
+                        padding: const EdgeInsets.all(6),
+                        child: Text(
+                          book.title.characters.first,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        book.title,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(book.author),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        ref
+                            .read(appControllerProvider.notifier)
+                            .addSearch(_query);
+                        context.push('/reader/${book.id}');
+                      },
+                    );
+                  },
+                ),
+        ),
+      ),
     );
   }
 }

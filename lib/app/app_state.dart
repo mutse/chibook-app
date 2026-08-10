@@ -43,6 +43,7 @@ class AppState {
     bool? initialized,
     bool? isGrid,
     String? activeAudioBookId,
+    bool clearActiveAudioBookId = false,
     List<Highlight>? highlights,
     List<AudioProgress>? audioProgress,
     List<ListeningRecord>? listeningRecords,
@@ -53,7 +54,9 @@ class AppState {
     ttsSettings: ttsSettings ?? this.ttsSettings,
     initialized: initialized ?? this.initialized,
     isGrid: isGrid ?? this.isGrid,
-    activeAudioBookId: activeAudioBookId ?? this.activeAudioBookId,
+    activeAudioBookId: clearActiveAudioBookId
+        ? null
+        : (activeAudioBookId ?? this.activeAudioBookId),
     highlights: highlights ?? this.highlights,
     audioProgress: audioProgress ?? this.audioProgress,
     listeningRecords: listeningRecords ?? this.listeningRecords,
@@ -75,37 +78,51 @@ class AppController extends Notifier<AppState> {
   }
 
   Future<void> _initialize() async {
-    final values = await Future.wait([
-      _repository.loadBooks(),
-      _repository.loadSettings(),
-      _repository.loadHighlights(),
-      _repository.loadTtsSettings(),
-      _repository.loadAudioProgress(),
-      _repository.loadListeningRecords(),
-    ]);
-    final books = values[0] as List<Book>;
-    final bookIds = books.map((book) => book.id).toSet();
-    final audioProgress = (values[4] as List<AudioProgress>)
-        .where((value) => bookIds.contains(value.bookId))
-        .toList();
-    final listeningRecords = (values[5] as List<ListeningRecord>)
-        .where((value) => bookIds.contains(value.bookId))
-        .toList();
-    var ttsSettings = values[3] as TtsSettings;
-    if (ttsSettings.apiKey.isNotEmpty) {
-      await _credentials.writeOpenAiKey(ttsSettings.apiKey);
-      ttsSettings = ttsSettings.copyWith(clearApiKey: true);
-      await _repository.saveTtsSettings(ttsSettings);
+    try {
+      final values = await Future.wait([
+        _repository.loadBooks(),
+        _repository.loadSettings(),
+        _repository.loadHighlights(),
+        _repository.loadTtsSettings(),
+        _repository.loadAudioProgress(),
+        _repository.loadListeningRecords(),
+      ]);
+      final books = values[0] as List<Book>;
+      final bookIds = books.map((book) => book.id).toSet();
+      final storedProgress = values[4] as List<AudioProgress>;
+      final storedRecords = values[5] as List<ListeningRecord>;
+      final audioProgress = storedProgress
+          .where((value) => bookIds.contains(value.bookId))
+          .toList();
+      final listeningRecords = storedRecords
+          .where((value) => bookIds.contains(value.bookId))
+          .toList();
+      var ttsSettings = values[3] as TtsSettings;
+      if (ttsSettings.apiKey.isNotEmpty) {
+        await _credentials.writeOpenAiKey(ttsSettings.apiKey);
+        ttsSettings = ttsSettings.copyWith(clearApiKey: true);
+        await _repository.saveTtsSettings(ttsSettings);
+      }
+      state = state.copyWith(
+        books: books,
+        settings: values[1] as ReaderSettings,
+        highlights: values[2] as List<Highlight>,
+        ttsSettings: ttsSettings,
+        audioProgress: audioProgress,
+        listeningRecords: listeningRecords,
+        initialized: true,
+      );
+      // 孤儿记录（书籍已删除）过滤后写回磁盘，否则只在内存生效，下次启动仍会读到。
+      await Future.wait([
+        if (audioProgress.length != storedProgress.length)
+          _repository.saveAudioProgress(audioProgress),
+        if (listeningRecords.length != storedRecords.length)
+          _repository.saveListeningRecords(listeningRecords),
+      ]);
+    } catch (_) {
+      // 初始化失败也必须让 UI 走出加载态，否则整个 App 卡在转圈。
+      state = state.copyWith(initialized: true);
     }
-    state = state.copyWith(
-      books: books,
-      settings: values[1] as ReaderSettings,
-      highlights: values[2] as List<Highlight>,
-      ttsSettings: ttsSettings,
-      audioProgress: audioProgress,
-      listeningRecords: listeningRecords,
-      initialized: true,
-    );
   }
 
   void setGrid(bool value) => state = state.copyWith(isGrid: value);
@@ -120,8 +137,10 @@ class AppController extends Notifier<AppState> {
 
   Future<void> removeBook(String id) async {
     final removed = state.books.where((book) => book.id == id).firstOrNull;
+    _listeningTicks.remove(id);
     state = state.copyWith(
       books: state.books.where((e) => e.id != id).toList(),
+      clearActiveAudioBookId: state.activeAudioBookId == id,
       highlights: state.highlights
           .where((highlight) => highlight.bookId != id)
           .toList(),
@@ -144,8 +163,12 @@ class AppController extends Notifier<AppState> {
 
   Future<void> removeBooks(Set<String> ids) async {
     final removed = state.books.where((book) => ids.contains(book.id)).toList();
+    for (final id in ids) {
+      _listeningTicks.remove(id);
+    }
     state = state.copyWith(
       books: state.books.where((book) => !ids.contains(book.id)).toList(),
+      clearActiveAudioBookId: ids.contains(state.activeAudioBookId),
       highlights: state.highlights
           .where((highlight) => !ids.contains(highlight.bookId))
           .toList(),
@@ -255,6 +278,10 @@ class AppController extends Notifier<AppState> {
         updatedAt: now,
       );
       records = [record, ...records.where((value) => value.bookId != bookId)];
+    } else {
+      // 暂停/中断时丢弃计时起点：否则来电或拔耳机后恢复播放，中断期间的
+      // 时长会被算作有效收听（10 秒的 clamp 只能兜住短暂停顿）。
+      _listeningTicks.remove(bookId);
     }
     state = state.copyWith(
       audioProgress: progressValues,
