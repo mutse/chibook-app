@@ -87,11 +87,12 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
             selected: _draft.provider == provider,
             enabled:
                 provider == TtsProvider.builtin ||
+                provider == TtsProvider.azure ||
                 provider == TtsProvider.openai,
             onTap: () => _selectProvider(provider),
           ),
         ),
-        if (_draft.isCloud) ...[
+        if (_draft.provider == TtsProvider.openai) ...[
           const _SectionTitle('接口配置'),
           Card(
             elevation: 0,
@@ -156,6 +157,35 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
             ),
           ),
         ],
+        if (_draft.provider == TtsProvider.azure) ...[
+          const _SectionTitle('免密在线语音'),
+          Card(
+            elevation: 0,
+            margin: EdgeInsets.zero,
+            child: const Padding(
+              padding: EdgeInsets.all(14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.cloud_outlined, size: 20),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '无需填写 API Key。此选项使用 Microsoft Edge Read Aloud '
+                      '兼容接口提供神经网络语音，需要联网；它不是带 SLA 的正式 '
+                      'Azure Speech API，微软调整接口时可能暂时不可用。',
+                      style: TextStyle(
+                        color: AppColors.graphite,
+                        fontSize: 12,
+                        height: 1.55,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
         const _SectionTitle('发音人'),
         Card(
           elevation: 0,
@@ -210,7 +240,8 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
               )
               .toList(),
         ),
-        if (_draft.provider == TtsProvider.openai) ...[
+        if (_draft.provider == TtsProvider.openai ||
+            _draft.provider == TtsProvider.azure) ...[
           const _SectionTitle('云端音频缓存'),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -290,6 +321,21 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       }
       if (provider == TtsProvider.openai) {
         _voices = _openAiVoices;
+        if (!_openAiVoices.any((voice) => voice.name == _draft.voiceName)) {
+          _draft = _draft.copyWith(
+            voiceName: _openAiVoices.first.name,
+            clearSystemVoiceId: true,
+          );
+        }
+      }
+      if (provider == TtsProvider.azure) {
+        _voices = _microsoftVoices;
+        if (!_microsoftVoices.any((voice) => voice.name == _draft.voiceName)) {
+          _draft = _draft.copyWith(
+            voiceName: _microsoftVoices.first.name,
+            clearSystemVoiceId: true,
+          );
+        }
       }
       _status = null;
     });
@@ -297,10 +343,14 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   }
 
   void _refreshVoices() {
-    if (_draft.provider == TtsProvider.openai) {
-      _voices = _openAiVoices;
-    } else {
-      _loadVoices();
+    switch (_draft.provider) {
+      case TtsProvider.openai:
+        _voices = _openAiVoices;
+      case TtsProvider.azure:
+        _voices = _microsoftVoices;
+      case TtsProvider.builtin:
+      case TtsProvider.aliyun:
+        _loadVoices();
     }
   }
 
@@ -436,7 +486,7 @@ class _ProviderCard extends StatelessWidget {
     final (name, description) = switch (provider) {
       TtsProvider.builtin => ('系统内置语音', '无需联网，音质和可用音色因设备而异'),
       TtsProvider.aliyun => ('阿里云 · 智能语音', '支持普通话、方言和多种情感发音人'),
-      TtsProvider.azure => ('Azure Speech', '神经网络语音，中英混排表现稳定'),
+      TtsProvider.azure => ('微软在线语音（免密）', 'Edge Read Aloud 兼容神经语音，无需 API Key'),
       TtsProvider.openai => ('OpenAI TTS', '自然度较高，使用量按服务商规则计费'),
     };
     return Card(
@@ -457,6 +507,8 @@ class _ProviderCard extends StatelessWidget {
           label: Text(
             provider == TtsProvider.builtin
                 ? '免费'
+                : provider == TtsProvider.azure
+                ? '免密在线'
                 : enabled
                 ? '云端'
                 : '待接入',
@@ -471,7 +523,7 @@ class _ProviderCard extends StatelessWidget {
 
 String _endpointHint(TtsProvider provider) => switch (provider) {
   TtsProvider.aliyun => '如 cn-shanghai',
-  TtsProvider.azure => '如 eastasia',
+  TtsProvider.azure => '',
   TtsProvider.openai => 'https://api.openai.com/v1',
   TtsProvider.builtin => '',
 };
@@ -503,6 +555,13 @@ const _openAiVoices = <_VoiceOption>[
   _VoiceOption(name: 'Sage', locale: 'AI'),
   _VoiceOption(name: 'Shimmer', locale: 'AI'),
   _VoiceOption(name: 'Verse', locale: 'AI'),
+];
+
+const _microsoftVoices = <_VoiceOption>[
+  _VoiceOption(name: '晓晓 · 女声', locale: '普通话 · 推荐'),
+  _VoiceOption(name: '晓伊 · 女声', locale: '普通话'),
+  _VoiceOption(name: '云希 · 男声', locale: '普通话 · 推荐'),
+  _VoiceOption(name: '云健 · 男声', locale: '普通话'),
 ];
 
 String _formatBytes(int bytes) {

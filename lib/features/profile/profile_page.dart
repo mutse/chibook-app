@@ -217,7 +217,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     value: switch (state.ttsSettings.provider) {
                       TtsProvider.builtin => '系统内置',
                       TtsProvider.aliyun => '阿里云',
-                      TtsProvider.azure => 'Azure',
+                      TtsProvider.azure => '微软在线（免密）',
                       TtsProvider.openai => 'OpenAI',
                     },
                     onTap: () => context.push('/settings/tts'),

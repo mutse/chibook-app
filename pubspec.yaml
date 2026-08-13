@@ -43,6 +43,10 @@ dependencies:
   xml: ^6.6.1
   html: ^0.15.6
   flutter_tts: ^4.2.5
+  # Microsoft Edge Read Aloud compatible neural voices. This is the
+  # keyless Microsoft online option; official Azure Speech still requires
+  # a resource key or Entra bearer token.
+  edge_tts: ^0.1.5
   audio_service: ^0.18.18
   just_audio: ^0.10.6
   # audio_service 与 just_audio 的传递依赖，这里提升为直接依赖以便处理

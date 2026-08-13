@@ -52,7 +52,9 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   int get characterOffset => _characterOffset;
   double get speed => _speed;
   PlaybackMode get mode => _mode;
-  bool get isCloud => _settings.provider == TtsProvider.openai;
+  bool get isCloud =>
+      _settings.provider == TtsProvider.openai ||
+      _settings.provider == TtsProvider.azure;
 
   /// 定时关闭状态由 handler 持有，页面重建后可据此恢复标签显示。
   bool get stopsAfterCurrentChapter => _stopAfterCurrentChapter;
@@ -194,7 +196,8 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     final wasPlaying = playbackState.value.playing;
     final changedEngine = settings.provider != _settings.provider;
     final changedCloudVoice =
-        settings.provider == TtsProvider.openai &&
+        (settings.provider == TtsProvider.openai ||
+            settings.provider == TtsProvider.azure) &&
         (settings.voiceName != _settings.voiceName ||
             settings.endpoint != _settings.endpoint);
     _settings = settings;
@@ -399,7 +402,8 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       return;
     }
     if (_characterOffset >= content.length) _characterOffset = 0;
-    if (_settings.provider == TtsProvider.openai) {
+    if (_settings.provider == TtsProvider.openai ||
+        _settings.provider == TtsProvider.azure) {
       await _playCloudChunk();
     } else if (_settings.provider == TtsProvider.builtin) {
       // builtin 路径同样需要 token 校验：setSpeechRate 之后若有新的
