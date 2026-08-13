@@ -6,6 +6,8 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../core/pdf_text.dart';
+
 class PdfOcrService {
   bool get isSupported =>
       !kIsWeb &&
@@ -49,10 +51,9 @@ class PdfOcrService {
       final result = await recognizer.processImage(
         InputImage.fromFilePath(temporary.path),
       );
-      return result.text
-          .replaceAll(RegExp(r'[ \t]+'), ' ')
-          .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-          .trim();
+      // 清洗交给 cleanPdfPageText：ML Kit 的中文结果同样会在汉字之间夹空格，
+      // 和文本层走同一套规范化才能保证两条路产出的正文格式一致。
+      return cleanPdfPageText(result.text);
     } finally {
       await recognizer.close();
       image?.dispose();

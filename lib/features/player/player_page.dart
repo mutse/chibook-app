@@ -12,8 +12,13 @@ import '../../core/theme.dart';
 import '../../services/tts_audio_handler.dart';
 
 class PlayerPage extends ConsumerStatefulWidget {
-  const PlayerPage({required this.bookId, super.key});
+  const PlayerPage({
+    required this.bookId,
+    this.returnToReader = false,
+    super.key,
+  });
   final String bookId;
+  final bool returnToReader;
 
   @override
   ConsumerState<PlayerPage> createState() => _PlayerPageState();
@@ -523,10 +528,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       _PlayerUtility(
         icon: Icons.subject,
         label: '切回阅读',
-        onTap: () => context.pushReplacement('/reader/${book.id}'),
+        onTap: () => _returnToReader(book),
       ),
     ],
   );
+
+  void _returnToReader(Book book) {
+    // 从阅读页进入播放器时，原阅读页仍在路由栈中且持有 PDF
+    // document/controller。再 pushReplacement 一个同路径阅读页会创建
+    // 第二个 PdfViewer，两个实例在转场期间共享并释放同一文档，
+    // 可导致“加载 PDF 文档失败”。直接 pop 回原页还能保留缩放与页码。
+    if (widget.returnToReader && context.canPop()) {
+      context.pop();
+      return;
+    }
+    // 从书架、首页或迷你播放器直接进入时，路由栈中没有
+    // 对应的阅读页，此时才用阅读页替换当前播放页。
+    context.pushReplacement('/reader/${book.id}');
+  }
 
   Future<void> _showTimer() async {
     final choice = await showAdaptiveSheet<String>(

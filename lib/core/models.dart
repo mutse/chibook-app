@@ -52,6 +52,7 @@ class Book {
   final DateTime? lastOpenedAt;
 
   Book copyWith({
+    String? filePath,
     int? chapterIndex,
     double? progress,
     bool? isPinned,
@@ -63,7 +64,7 @@ class Book {
     format: format,
     coverColor: coverColor,
     chapters: chapters,
-    filePath: filePath,
+    filePath: filePath ?? this.filePath,
     chapterIndex: chapterIndex ?? this.chapterIndex,
     progress: progress ?? this.progress,
     isPinned: isPinned ?? this.isPinned,

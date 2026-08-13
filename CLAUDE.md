@@ -60,7 +60,7 @@ Pages subscribe to `ttsAudioHandler.playbackState` and `ttsAudioHandler.customEv
 Imports copy the picked file into `<appDocuments>/library/<uuid>.<ext>` and parse it to `List<Chapter>` at import time — the reader and TTS only ever see plain text.
 - **TXT** — UTF-8 with latin1 fallback, split on `第…章/节/回` or `Chapter N`; a single-part result becomes one `正文` chapter.
 - **EPUB** — no WebView. Reads the ZIP directly: `META-INF/container.xml` → OPF → manifest + spine order → XHTML → plain text. Complex CSS/floats/footnotes are intentionally lost; this is what lets themes, selection, highlights, and TTS share one position model.
-- **PDF** — per-page text extraction; empty pages fall back to on-device Google ML Kit Chinese OCR (`lib/services/pdf_ocr_service.dart`, Android/iOS only). One page = one `Chapter`.
+- **PDF** — per-page text extraction filtered through `lib/core/pdf_text.dart`. `isGarbledPdfText` rejects a page whose font has no ToUnicode CMap (PDFium then returns NUL/PUA code points — non-empty but unreadable, very common in Chinese PDFs); `cleanPdfPageText` normalizes both the text layer and the OCR result (drops unmapped glyphs, removes PDFium's inter-ideograph spaces, rejoins hard-wrapped lines). Empty **and** garbled pages fall back to on-device Google ML Kit Chinese OCR (`lib/services/pdf_ocr_service.dart`, Android/iOS only); when OCR also comes back empty the page is stored empty on purpose — a garbled page must never be persisted, TTS would read it aloud. One page = one `Chapter`.
 
 `loadBooks()` returns `demoBooks` (bundled sample library) when nothing is stored or decoding fails.
 

@@ -62,7 +62,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/player/:id',
       parentNavigatorKey: _rootNavigatorKey,
-      builder: (_, state) => PlayerPage(bookId: state.pathParameters['id']!),
+      builder: (_, state) => PlayerPage(
+        bookId: state.pathParameters['id']!,
+        returnToReader: state.uri.queryParameters['from'] == 'reader',
+      ),
     ),
     GoRoute(
       path: '/settings/tts',

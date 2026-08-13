@@ -10,7 +10,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:xml/xml.dart';
 
+import '../core/book_file_path.dart';
 import '../core/models.dart';
+import '../core/pdf_text.dart';
 import '../services/pdf_ocr_service.dart';
 
 class BookRepository {
@@ -31,15 +33,55 @@ class BookRepository {
   Future<List<Book>> loadBooks() async {
     final stored = await _preferences.getString(_booksKey);
     if (stored == null) return demoBooks;
+    final List<Book> decoded;
     try {
-      return decodeBooks(stored);
+      decoded = decodeBooks(stored);
     } catch (_) {
       return demoBooks;
     }
+    try {
+      final documents = await getApplicationDocumentsDirectory();
+      final books = decoded
+          .map(
+            (book) => book.copyWith(
+              filePath: resolveBookFilePath(book.filePath, documents.path),
+            ),
+          )
+          .toList();
+      final portable = books
+          .map(
+            (book) => book.copyWith(
+              filePath: persistableBookFilePath(book.filePath, documents.path),
+            ),
+          )
+          .toList();
+      final migrated = encodeBooks(portable);
+      if (migrated != stored) {
+        try {
+          await _preferences.setString(_booksKey, migrated);
+        } catch (_) {
+          // Migration persistence may be retried next launch; the repaired
+          // runtime paths are still safe to use during this session.
+        }
+      }
+      return books;
+    } catch (_) {
+      // A path-provider failure must not hide otherwise valid library data.
+      return decoded;
+    }
   }
 
-  Future<void> saveBooks(List<Book> books) =>
-      _preferences.setString(_booksKey, encodeBooks(books));
+  Future<void> saveBooks(List<Book> books) async {
+    final documents = await getApplicationDocumentsDirectory();
+    final portable = books
+        .map(
+          (book) => book.copyWith(
+            filePath: persistableBookFilePath(book.filePath, documents.path),
+          ),
+        )
+        .toList();
+    await _preferences.setString(_booksKey, encodeBooks(portable));
+  }
 
   Future<ReaderSettings> loadSettings() async {
     final stored = await _preferences.getString(_settingsKey);
@@ -180,24 +222,26 @@ class BookRepository {
   Future<List<Chapter>> _extractPdfText(String path) async {
     PdfDocument? document;
     try {
-      document = await PdfDocument.openFile(path);
+      // The imported copy is already complete on disk. Progressive loading is
+      // intended for sparse/range-backed documents and may leave a local page
+      // in a pending state after text extraction, which later appears as a
+      // blank page in PdfViewer.
+      document = await PdfDocument.openFile(path, useProgressiveLoading: false);
       final chapters = <Chapter>[];
       var hasText = false;
       for (final page in document.pages) {
-        final rawText = await page.loadText();
-        var text =
-            rawText?.fullText
-                .replaceAll(RegExp(r'[ \t]+'), ' ')
-                .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-                .trim() ??
-            '';
+        final raw = (await page.loadText())?.fullText ?? '';
+        // 字体缺 ToUnicode 时提取结果非空却全是乱码，必须和空页一样退回 OCR；
+        // 直接存下来会让播放页和 TTS 拿到垃圾内容。
+        var text = isGarbledPdfText(raw) ? '' : cleanPdfPageText(raw);
         if (text.isEmpty) {
           try {
-            text = await _ocr.recognizePage(page) ?? '';
+            text = cleanPdfPageText(await _ocr.recognizePage(page) ?? '');
           } catch (_) {
             text = '';
           }
         }
+        // OCR 也没救回来时保持空白：标为“无文本”并禁用听书，比朗读乱码诚实。
         hasText = hasText || text.isNotEmpty;
         chapters.add(Chapter(title: '第 ${page.pageNumber} 页', content: text));
       }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,7 @@ import 'package:pdfrx/pdfrx.dart';
 import '../../app/app_state.dart';
 import '../../core/adaptive.dart';
 import '../../core/models.dart';
+import '../../core/pdf_page.dart';
 import '../../core/sentence_bounds.dart';
 import '../../core/theme.dart';
 import '../../services/tts_audio_handler.dart';
@@ -243,7 +245,8 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
               bottom: _chrome ? 104 : 30,
               child: FloatingActionButton.extended(
                 heroTag: 'listen-${widget.book.id}',
-                onPressed: () => context.push('/player/${widget.book.id}'),
+                onPressed: () =>
+                    context.push('/player/${widget.book.id}?from=reader'),
                 backgroundColor: AppColors.bamboo,
                 foregroundColor: Colors.white,
                 icon: const Icon(Icons.play_arrow_rounded, size: 19),
@@ -1176,7 +1179,7 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
           tooltip: '听书',
           onPressed: () {
             if (book.chapters.isNotEmpty) {
-              context.push('/player/${book.id}');
+              context.push('/player/${book.id}?from=reader');
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('此 PDF 未提取到文本；扫描版 PDF 暂不支持听书。')),
@@ -1187,8 +1190,8 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
         ),
       ],
     ),
-    body: book.filePath == null
-        ? const Center(child: Text('PDF 文件路径不可用'))
+    body: book.filePath == null || !File(book.filePath!).existsSync()
+        ? const _PdfFileUnavailable()
         : LayoutBuilder(
             builder: (context, constraints) {
               final form = formFactorOf(constraints.maxWidth);
@@ -1234,9 +1237,28 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
     children: [
       PdfViewer.file(
         book.filePath!,
+        // Imported books are complete local files. Avoid the progressive page
+        // state machine used by range/sparse sources; a failed background page
+        // transition is otherwise swallowed by pdfrx and leaves a white page.
+        useProgressiveLoading: false,
         controller: _pdfController,
-        initialPageNumber: book.chapterIndex + 1,
+        initialPageNumber: initialPdfPageNumber(
+          chapterIndex: book.chapterIndex,
+          knownPageCount: book.chapters.length,
+        ),
         params: PdfViewerParams(
+          // Some PDFs cannot render with PDFium's limited image-cache flag.
+          // pdfrx intentionally ignores page.render errors, so the symptom is
+          // a blank white sheet rather than an error banner. The compatibility
+          // cache path is more reliable for user-imported documents.
+          limitRenderingCache: false,
+          loadingBannerBuilder: (_, _, _) =>
+              const Center(child: CircularProgressIndicator()),
+          errorBannerBuilder: (context, error, _, documentRef) => _PdfLoadError(
+            onRetry: () => unawaited(
+              documentRef.resolveListenable().load(forceReload: true),
+            ),
+          ),
           onViewerReady: (document, _) {
             if (mounted) {
               setState(() => _pageCount = document.pages.length);
@@ -1322,4 +1344,69 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
     final excerpt = text.substring(start, end).replaceAll('\n', ' ');
     return '自动跟读 · 第 ${page + 1} 页\n$excerpt';
   }
+}
+
+class _PdfFileUnavailable extends StatelessWidget {
+  const _PdfFileUnavailable();
+
+  @override
+  Widget build(BuildContext context) => const Center(
+    child: Padding(
+      padding: EdgeInsets.all(28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.file_present_outlined,
+            size: 48,
+            color: AppColors.graphite,
+          ),
+          SizedBox(height: 14),
+          Text('未找到 PDF 原文件', style: TextStyle(fontWeight: FontWeight.w800)),
+          SizedBox(height: 8),
+          Text(
+            '文件可能已被系统或其他应用移除，请返回书架后重新导入。',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.graphite),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _PdfLoadError extends StatelessWidget {
+  const _PdfLoadError({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            size: 48,
+            color: AppColors.seal,
+          ),
+          const SizedBox(height: 14),
+          const Text('PDF 加载失败', style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          const Text(
+            '请确认文件未损坏，或稍后重试。',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.graphite),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh),
+            label: const Text('重新加载'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
