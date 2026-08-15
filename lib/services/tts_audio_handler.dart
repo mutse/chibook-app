@@ -6,6 +6,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
 import '../core/models.dart';
+import '../core/reading_follow.dart';
 import 'cloud_tts_service.dart';
 
 late final TtsAudioHandler ttsAudioHandler;
@@ -383,9 +384,15 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> _moveChapter(int delta) async {
     final book = _book;
     if (book == null || book.chapters.isEmpty) return;
+    final nextChapter = nextReadableChapterIndex(
+      book.chapters,
+      currentIndex: _chapter,
+      direction: delta,
+    );
+    if (nextChapter == null) return;
     _operation++;
     await _stopEngines();
-    _chapter = (_chapter + delta).clamp(0, book.chapters.length - 1);
+    _chapter = nextChapter;
     _characterOffset = 0;
     _activeChunk = null;
     _publishMediaItem();
@@ -398,7 +405,29 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     if (book == null || book.chapters.isEmpty) return;
     final content = book.chapters[_chapter].content;
     if (content.trim().isEmpty) {
-      _reportError('当前章节没有可朗读文本');
+      final nextChapter = switch (_mode) {
+        PlaybackMode.sequential => nextReadableChapterIndex(
+          book.chapters,
+          currentIndex: _chapter,
+          direction: 1,
+        ),
+        PlaybackMode.reverse => nextReadableChapterIndex(
+          book.chapters,
+          currentIndex: _chapter,
+          direction: -1,
+        ),
+        PlaybackMode.repeatOne => null,
+      };
+      if (nextChapter != null) {
+        _chapter = nextChapter;
+        _characterOffset = 0;
+        _activeChunk = null;
+        _publishMediaItem();
+        _publishPosition(type: 'chapter');
+        await _speakCurrent();
+      } else {
+        _reportError('没有更多可朗读文本');
+      }
       return;
     }
     if (_characterOffset >= content.length) _characterOffset = 0;
@@ -513,13 +542,19 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       return;
     }
     final nextChapter = switch (_mode) {
-      PlaybackMode.sequential => _chapter + 1,
-      PlaybackMode.reverse => _chapter - 1,
+      PlaybackMode.sequential => nextReadableChapterIndex(
+        book?.chapters ?? const [],
+        currentIndex: _chapter,
+        direction: 1,
+      ),
+      PlaybackMode.reverse => nextReadableChapterIndex(
+        book?.chapters ?? const [],
+        currentIndex: _chapter,
+        direction: -1,
+      ),
       PlaybackMode.repeatOne => _chapter,
     };
-    if (book != null &&
-        nextChapter >= 0 &&
-        nextChapter < book.chapters.length) {
+    if (book != null && nextChapter != null) {
       _chapter = nextChapter;
       _characterOffset = 0;
       _activeChunk = null;

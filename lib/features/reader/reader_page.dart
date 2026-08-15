@@ -10,6 +10,7 @@ import '../../app/app_state.dart';
 import '../../core/adaptive.dart';
 import '../../core/models.dart';
 import '../../core/pdf_page.dart';
+import '../../core/reading_follow.dart';
 import '../../core/sentence_bounds.dart';
 import '../../core/theme.dart';
 import '../../services/tts_audio_handler.dart';
@@ -49,6 +50,7 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   int _spokenEnd = 0;
   int? _targetChapter;
   DateTime? _followHoldUntil;
+  Timer? _followResumeTimer;
   StreamSubscription? _playbackSubscription;
   StreamSubscription? _eventSubscription;
 
@@ -56,8 +58,16 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   bool get _followHeld =>
       _followHoldUntil != null && DateTime.now().isBefore(_followHoldUntil!);
 
-  void _holdFollow() =>
-      _followHoldUntil = DateTime.now().add(const Duration(seconds: 4));
+  void _holdFollow() {
+    const duration = Duration(seconds: 4);
+    _followHoldUntil = DateTime.now().add(duration);
+    _followResumeTimer?.cancel();
+    // 即使暂停窗口内没有新的 TTS 进度事件，时间一到也要主动回到朗读位置。
+    _followResumeTimer = Timer(duration, () {
+      _followHoldUntil = null;
+      _followSpokenChapter();
+    });
+  }
 
   @override
   void initState() {
@@ -73,7 +83,15 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
       _playing = ttsAudioHandler.playbackState.value.playing;
     }
     _playbackSubscription = ttsAudioHandler.playbackState.listen((state) {
-      if (mounted) setState(() => _playing = state.playing);
+      if (!mounted) return;
+      setState(() {
+        _playing = state.playing;
+        if (state.playing && ttsAudioHandler.currentBookId == widget.book.id) {
+          _spokenChapter = ttsAudioHandler.currentChapter;
+          _spokenStart = _spokenEnd = ttsAudioHandler.characterOffset;
+        }
+      });
+      if (state.playing) _followSpokenChapter();
     });
     _eventSubscription = ttsAudioHandler.customEvent.listen(_handleAudioEvent);
   }
@@ -82,6 +100,7 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   void dispose() {
     _playbackSubscription?.cancel();
     _eventSubscription?.cancel();
+    _followResumeTimer?.cancel();
     _pages.dispose();
     super.dispose();
   }
@@ -341,30 +360,49 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
       _spokenStart = event['start'] as int? ?? _spokenStart;
       _spokenEnd = event['end'] as int? ?? _spokenEnd;
     });
-    if (_playing &&
-        chapter != _chapter &&
-        chapter != _targetChapter &&
-        !_followHeld) {
-      _targetChapter = chapter;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        if (!_pages.hasClients || !_playing || _followHeld) {
-          // 本次翻章被放弃时必须清除目标章，否则后续同章事件会被
-          // `chapter != _targetChapter` 一直挡住，自动翻页再也不会恢复。
-          _targetChapter = null;
-          return;
-        }
-        _pages
-            .animateToPage(
-              chapter,
-              duration: const Duration(milliseconds: 360),
-              curve: Curves.easeInOutCubic,
-            )
-            // 动画结束（含被用户手势打断）后清除目标章；否则打断后
-            // `chapter != _targetChapter` 会一直挡住后续自动翻页。
-            .whenComplete(() => _targetChapter = null);
-      });
+    _followSpokenChapter();
+  }
+
+  void _followSpokenChapter() {
+    final chapter = _spokenChapter;
+    if (!_playing ||
+        chapter == null ||
+        chapter == _chapter ||
+        chapter == _targetChapter ||
+        _followHeld) {
+      return;
     }
+    _targetChapter = chapter;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_pages.hasClients || !_playing || _followHeld) {
+        if (_targetChapter == chapter) _targetChapter = null;
+        return;
+      }
+
+      // 播放器覆盖在阅读页上时根路由的 TickerMode 会停用，animateToPage
+      // 会一直卡在未完成状态。后台直接跳到朗读页，回到阅读页时再继续平滑滚动。
+      final routeIsCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+      if (!routeIsCurrent) {
+        _pages.jumpToPage(chapter);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _chapter == chapter && _targetChapter == chapter) {
+            _targetChapter = null;
+          }
+        });
+        return;
+      }
+
+      _pages
+          .animateToPage(
+            chapter,
+            duration: const Duration(milliseconds: 360),
+            curve: Curves.easeInOutCubic,
+          )
+          .whenComplete(() {
+            if (mounted && _targetChapter == chapter) _targetChapter = null;
+          });
+    });
   }
 
   void _showContents() {
@@ -439,8 +477,11 @@ class _ChapterPage extends StatefulWidget {
 
 class _ChapterPageState extends State<_ChapterPage> {
   final ScrollController _scroll = ScrollController();
+  final GlobalKey _textKey = GlobalKey();
   Timer? _followTimer;
   DateTime? _userScrollHoldUntil;
+  double? _lastFollowTarget;
+  int? _lastFollowSentenceStart;
 
   /// 用户拖动正文后暂停自动跟随滚动，避免和用户抢夺滚动位置。
   bool get _userScrollHeld =>
@@ -458,8 +499,18 @@ class _ChapterPageState extends State<_ChapterPage> {
   @override
   void didUpdateWidget(covariant _ChapterPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final layoutChanged =
+        widget.chapter.content != oldWidget.chapter.content ||
+        widget.settings.fontSize != oldWidget.settings.fontSize ||
+        widget.settings.lineHeight != oldWidget.settings.lineHeight;
+    if (layoutChanged) {
+      _lastFollowTarget = null;
+      _lastFollowSentenceStart = null;
+    }
     if (widget.autoFollow &&
-        (widget.spokenEnd != oldWidget.spokenEnd || !oldWidget.autoFollow)) {
+        (widget.spokenEnd != oldWidget.spokenEnd ||
+            !oldWidget.autoFollow ||
+            layoutChanged)) {
       _scheduleFollow();
     }
   }
@@ -502,6 +553,8 @@ class _ChapterPageState extends State<_ChapterPage> {
                 _userScrollHoldUntil = DateTime.now().add(
                   const Duration(seconds: 4),
                 );
+                _lastFollowTarget = null;
+                _lastFollowSentenceStart = null;
                 widget.onUserScroll();
               }
               return false;
@@ -510,6 +563,7 @@ class _ChapterPageState extends State<_ChapterPage> {
               controller: _scroll,
               child: SelectableText.rich(
                 _textSpan(),
+                key: _textKey,
                 contextMenuBuilder: (context, editableState) {
                   final selection = editableState.textEditingValue.selection;
                   Future<void> save({required bool withNote}) async {
@@ -595,12 +649,7 @@ class _ChapterPageState extends State<_ChapterPage> {
 
   TextSpan _textSpan() {
     final text = widget.chapter.content;
-    final baseStyle = TextStyle(
-      color: widget.color,
-      fontSize: widget.settings.fontSize,
-      height: widget.settings.lineHeight,
-      letterSpacing: .35,
-    );
+    final baseStyle = _baseTextStyle();
     final rawStart = (widget.spokenStart ?? 0).clamp(0, text.length);
     final rawEnd = (widget.spokenEnd ?? rawStart).clamp(rawStart, text.length);
     if (rawEnd <= rawStart) return TextSpan(text: text, style: baseStyle);
@@ -616,7 +665,6 @@ class _ChapterPageState extends State<_ChapterPage> {
           text: text.substring(start, end),
           style: TextStyle(
             backgroundColor: AppColors.seal.withValues(alpha: .32),
-            fontWeight: FontWeight.w800,
           ),
         ),
         if (end < text.length) TextSpan(text: text.substring(end)),
@@ -624,27 +672,94 @@ class _ChapterPageState extends State<_ChapterPage> {
     );
   }
 
+  TextStyle _baseTextStyle() => TextStyle(
+    color: widget.color,
+    fontSize: widget.settings.fontSize,
+    height: widget.settings.lineHeight,
+    letterSpacing: .35,
+  );
+
   void _scheduleFollow() {
     _followTimer?.cancel();
     _followTimer = Timer(const Duration(milliseconds: 80), () {
       if (!mounted || !_scroll.hasClients || !widget.autoFollow) return;
-      // 用户刚拖动过正文：让位窗口内不自动滚动，窗口结束后
-      // 下一次朗读进度回调会重新触发跟随。
-      if (_userScrollHeld) return;
+      if (_userScrollHeld) {
+        // 不依赖下一次进度事件；短句或暂停状态下也能在让位结束后恢复。
+        final remaining = _userScrollHoldUntil!.difference(DateTime.now());
+        _followTimer = Timer(
+          remaining + const Duration(milliseconds: 20),
+          _scheduleFollow,
+        );
+        return;
+      }
       final length = widget.chapter.content.length;
       if (length == 0) return;
-      final fraction = ((widget.spokenEnd ?? 0) / length).clamp(0.0, 1.0);
       final position = _scroll.position;
-      final target =
-          (position.maxScrollExtent * fraction -
-                  position.viewportDimension * .32)
-              .clamp(0.0, position.maxScrollExtent);
-      _scroll.animateTo(
-        target,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
+      final sentenceStart = _spokenSentenceStart();
+      if (_lastFollowTarget != null &&
+          _lastFollowSentenceStart == sentenceStart) {
+        return;
+      }
+      final contentOffset = _textOffsetFor(
+        sentenceStart,
+        position.maxScrollExtent,
       );
+      final target = readingFollowScrollTarget(
+        contentOffset: contentOffset,
+        minScrollExtent: position.minScrollExtent,
+        maxScrollExtent: position.maxScrollExtent,
+        viewportDimension: position.viewportDimension,
+      );
+      // 一个句子会收到很多逐词回调。目标没变化时不要反复取消同一段动画。
+      if (_lastFollowTarget != null &&
+          (target - _lastFollowTarget!).abs() < 1) {
+        return;
+      }
+      _lastFollowTarget = target;
+      _lastFollowSentenceStart = sentenceStart;
+      if (ModalRoute.of(context)?.isCurrent ?? true) {
+        unawaited(
+          _scroll.animateTo(
+            target,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      } else {
+        // 阅读页被播放器覆盖时动画不会推进，直接同步位置。
+        _scroll.jumpTo(target);
+      }
     });
+  }
+
+  int _spokenSentenceStart() {
+    final text = widget.chapter.content;
+    final rawStart = (widget.spokenStart ?? 0).clamp(0, text.length);
+    final rawEnd = (widget.spokenEnd ?? rawStart).clamp(rawStart, text.length);
+    final probeStart = rawEnd > rawStart
+        ? rawStart
+        : (rawEnd > 0 ? rawEnd - 1 : 0);
+    return sentenceBoundsFor(text, probeStart, rawEnd).start;
+  }
+
+  double _textOffsetFor(int characterOffset, double fallbackExtent) {
+    final text = widget.chapter.content;
+    final box = _textKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize || box.size.width <= 0) {
+      return fallbackExtent * (characterOffset / text.length).clamp(0.0, 1.0);
+    }
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: _baseTextStyle()),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.maybeLocaleOf(context),
+    )..layout(maxWidth: box.size.width);
+    final offset = painter.getOffsetForCaret(
+      TextPosition(offset: characterOffset),
+      Rect.zero,
+    );
+    painter.dispose();
+    return offset.dy;
   }
 }
 
@@ -1141,7 +1256,8 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
   StreamSubscription? _eventSubscription;
   bool _playing = false;
   int? _spokenPage;
-  int? _lastFollowedPage;
+  int? _visiblePage;
+  int? _pdfFollowTarget;
   int _spokenStart = 0;
   int _spokenEnd = 0;
 
@@ -1157,7 +1273,13 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
     }
     _playbackSubscription = ttsAudioHandler.playbackState.listen((state) {
       if (!mounted) return;
-      setState(() => _playing = state.playing);
+      setState(() {
+        _playing = state.playing;
+        if (state.playing && ttsAudioHandler.currentBookId == book.id) {
+          _spokenPage = ttsAudioHandler.currentChapter;
+          _spokenStart = _spokenEnd = ttsAudioHandler.characterOffset;
+        }
+      });
       if (state.playing) _followSpokenPage();
     });
     _eventSubscription = ttsAudioHandler.customEvent.listen(_handleAudioEvent);
@@ -1253,12 +1375,14 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
           onViewerReady: (document, _) {
             if (mounted) {
               setState(() => _pageCount = document.pages.length);
-              _lastFollowedPage = null;
+              _pdfFollowTarget = null;
               _followSpokenPage();
             }
           },
           onPageChanged: (pageNumber) {
             if (pageNumber == null) return;
+            _visiblePage = pageNumber - 1;
+            if (_pdfFollowTarget == _visiblePage) _pdfFollowTarget = null;
             ref
                 .read(appControllerProvider.notifier)
                 .updateProgress(
@@ -1312,14 +1436,30 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
 
   void _followSpokenPage() {
     if (!_playing || _spokenPage == null || !_pdfController.isReady) return;
-    if (_lastFollowedPage == _spokenPage) return;
-    _lastFollowedPage = _spokenPage;
-    unawaited(
-      _pdfController.goToPage(
-        pageNumber: _spokenPage! + 1,
-        duration: const Duration(milliseconds: 360),
-      ),
-    );
+    final targetPage = _spokenPage!;
+    if (_visiblePage == targetPage || _pdfFollowTarget == targetPage) return;
+    _pdfFollowTarget = targetPage;
+    final routeIsCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    unawaited(_goToSpokenPdfPage(targetPage, routeIsCurrent: routeIsCurrent));
+  }
+
+  Future<void> _goToSpokenPdfPage(
+    int targetPage, {
+    required bool routeIsCurrent,
+  }) async {
+    try {
+      await _pdfController.goToPage(
+        pageNumber: targetPage + 1,
+        // 播放器覆盖阅读页时没有活动 ticker，零时长跳页才能保证返回时已同步。
+        duration: routeIsCurrent
+            ? const Duration(milliseconds: 360)
+            : Duration.zero,
+      );
+    } finally {
+      if (mounted && _pdfFollowTarget == targetPage) {
+        _pdfFollowTarget = null;
+      }
+    }
   }
 
   String _spokenPreview() {
