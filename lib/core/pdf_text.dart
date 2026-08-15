@@ -3,8 +3,9 @@
 /// PDFium 是逐字符返回 Unicode 码点的（`FPDFText_GetUnicode`）。当字体缺少
 /// ToUnicode CMap 时——中文 PDF 里非常常见，例如子集化的方正字体、排版软件
 /// 导出的 Identity-H 编码文档——返回值会退化成 0（NUL）或私用区码点，于是
-/// 提取结果非空但完全不可读。只用 `isEmpty` 判断“这页有没有文本”，就会把
-/// 这堆乱码当正文存进书里，播放页、跟读浮层和 TTS 全都拿到垃圾内容。
+/// 提取结果非空但完全不可读。另一类常见问题是文字层把普通汉字映射成康熙
+/// 部首（例如“目录”变成“⽬录”）。只用 `isEmpty` 判断“这页有没有文本”，
+/// 就会把这些乱码当正文存进书里，播放页、跟读浮层和 TTS 全都拿到垃圾内容。
 ///
 /// 因此这里把两件事分开：
 /// - [isGarbledPdfText] 判断这一页的文本层能不能信，用来决定是否退回 OCR；
@@ -25,15 +26,50 @@ const double _garbledRatio = 0.2;
 /// 短行，拼进正文只会更乱；正文行在 PDF 里通常有二三十字。
 const int _minWrappedLineLength = 12;
 
-/// 判定“整页无标点”所需的最少汉字数，低于这个量的短页面不做这项判断。
-const int _punctuationCheckIdeographs = 100;
+/// U+2F00–U+2FD5（康熙部首）对应的统一汉字。部分 PDF 的 ToUnicode CMap
+/// 会把正文中的普通汉字错误映射到部首区；字形看起来相近，但复制、搜索和 TTS
+/// 都会把它们当作不同字符。映射顺序来自 Unicode CJKRadicals 数据。
+const String _kangxiRadicalTargets =
+    '一丨丶丿乙亅二亠人儿入八冂冖冫几凵刀力勹匕匚匸十卜卩厂厶又口囗土士夂夊夕大女子宀寸小尢尸屮山巛工己巾干幺广廴廾弋弓彐彡彳心戈戶手支攴文斗斤方无日曰月木欠止歹殳毋比毛氏气水火爪父爻爿片牙牛犬玄玉瓜瓦甘生用田疋疒癶白皮皿目矛矢石示禸禾穴立竹米糸缶网羊羽老而耒耳聿肉臣自至臼舌舛舟艮色艸虍虫血行衣襾見角言谷豆豕豸貝赤走足身車辛辰辵邑酉釆里金長門阜隶隹雨靑非面革韋韭音頁風飛食首香馬骨高髟鬥鬯鬲鬼魚鳥鹵鹿麥麻黃黍黑黹黽鼎鼓鼠鼻齊齒龍龜龠';
 
-/// 每个汉字对应的标点数低于该值就算“没有标点”。中文正文通常十来个字一个
-/// 标点（约 0.07），留出一个数量级的余量。
-const double _minPunctuationPerIdeograph = 0.01;
-
-/// 汉字占比高于该值才认为这是一页中文正文，才对它做无标点判断。
-const double _ideographDominance = 0.6;
+/// CJK 部首补充区中有明确独体字含义、且会出现在 PDF 正文文字层里的字形。
+/// 带箭头注释的是实际问题 PDF 中出现的常用字符，其余简化部首来自同一
+/// Unicode CJKRadicals 映射表。
+const Map<int, int> _cjkRadicalSupplementTargets = {
+  0x2e9f: 0x6bcd, // ⺟ -> 母
+  0x2ea0: 0x6c11, // ⺠ -> 民
+  0x2ea6: 0x4e2c,
+  0x2eb0: 0x7e9f,
+  0x2ec4: 0x897f, // ⻄ -> 西
+  0x2ec5: 0x89c1,
+  0x2ec8: 0x8ba0,
+  0x2ec9: 0x8d1d,
+  0x2ecb: 0x8f66,
+  0x2ed0: 0x9485,
+  0x2ed3: 0x957f,
+  0x2ed4: 0x95e8,
+  0x2ed8: 0x9752, // ⻘ -> 青
+  0x2ed9: 0x97e6,
+  0x2eda: 0x9875,
+  0x2edb: 0x98ce,
+  0x2edc: 0x98de,
+  0x2ee0: 0x9963,
+  0x2ee2: 0x9a6c,
+  0x2ee5: 0x9c7c,
+  0x2ee6: 0x9e1f,
+  0x2ee7: 0x5364,
+  0x2ee8: 0x9ea6,
+  0x2ee9: 0x9ec4,
+  0x2eea: 0x9efe,
+  0x2eeb: 0x6589,
+  0x2eec: 0x9f50,
+  0x2eed: 0x6b6f,
+  0x2eee: 0x9f7f,
+  0x2eef: 0x7adc,
+  0x2ef0: 0x9f99,
+  0x2ef2: 0x4e80,
+  0x2ef3: 0x9f9f,
+};
 
 /// CJK 汉字、假名与全角标点：用于判断两个字符之间的空格是不是版面产物。
 const String _cjkRanges =
@@ -62,33 +98,22 @@ final RegExp _latinStart = RegExp(r'^[A-Za-z]');
 
 /// 判断 PDFium 提取的原始页面文本是否为乱码。
 ///
-/// 两条相互独立的证据：
-/// 1. 未映射字符（NUL、私用区、替换字符、扩展区汉字）占比过高——字体缺
-///    ToUnicode CMap 的典型症状；
-/// 2. 整页汉字很多却几乎没有标点——CMap 整体错位的典型症状：提取出的都是
-///    合法汉字，但连标点都被映射成了汉字，读起来完全不成句。
+/// 判断依据是未映射字符（NUL、私用区、替换字符、扩展区汉字）占比过高，
+/// 这是字体缺 ToUnicode CMap 的典型症状。不能用“汉字多但标点少”作为依据：
+/// 古籍、目录和逐行排版的正常文本同样可能没有标点，误判后 OCR 反而更差。
 ///
 /// 空白页返回 `false`：“没有文本”和“文本不可信”是两回事，调用方对两者的
 /// 处理恰好相同（都退回 OCR），但语义要分清。
 bool isGarbledPdfText(String raw) {
   var counted = 0;
   var suspect = 0;
-  var ideographs = 0;
-  var punctuation = 0;
   for (final rune in raw.runes) {
     if (_isWhitespace(rune)) continue;
     counted++;
     if (_isUnmappedGlyph(rune) || _isRareIdeograph(rune)) suspect++;
-    if (_isIdeograph(rune)) ideographs++;
-    if (_isPunctuation(rune)) punctuation++;
   }
   if (counted == 0) return false;
-  if (suspect / counted >= _garbledRatio) return true;
-  // 影印古籍这类正文本来就不带标点，会被误判——但那种页面本来也要走 OCR，
-  // 代价只是慢一点，而漏判换来的是朗读一整页读不通的句子。
-  return ideographs >= _punctuationCheckIdeographs &&
-      ideographs / counted >= _ideographDominance &&
-      punctuation / ideographs < _minPunctuationPerIdeograph;
+  return suspect / counted >= _garbledRatio;
 }
 
 /// 清洗一页 PDF 文本。文本层和 OCR 结果都走这里，保证两条路产出同样的格式。
@@ -99,14 +124,18 @@ String cleanPdfPageText(String raw) {
 
   final buffer = StringBuffer();
   for (final rune in raw.replaceAll('\r\n', '\n').runes) {
-    if (rune == 0x0d) {
+    final normalizedRune = _normalizeCjkRadical(rune);
+    if (normalizedRune == 0x0d) {
       buffer.write('\n'); // 落单的 \r 也是换行
-    } else if (rune == 0xa0 || rune == 0x2007 || rune == 0x202f) {
+    } else if (normalizedRune == 0xa0 ||
+        normalizedRune == 0x2007 ||
+        normalizedRune == 0x202f) {
       buffer.write(' '); // 各种不换行空格按普通空格处理
-    } else if (_isUnmappedGlyph(rune) || _isInvisible(rune)) {
+    } else if (_isUnmappedGlyph(normalizedRune) ||
+        _isInvisible(normalizedRune)) {
       continue; // 未映射或零宽字符：留着只会变成方框和朗读杂音
     } else {
-      buffer.writeCharCode(rune);
+      buffer.writeCharCode(normalizedRune);
     }
   }
 
@@ -168,24 +197,12 @@ bool _isNoncharacter(int rune) =>
 bool _isRareIdeograph(int rune) =>
     (rune >= 0x3400 && rune <= 0x4dbf) || (rune >= 0x20000 && rune <= 0x3ffff);
 
-bool _isIdeograph(int rune) =>
-    (rune >= 0x3400 && rune <= 0x4dbf) ||
-    (rune >= 0x4e00 && rune <= 0x9fff) ||
-    (rune >= 0xf900 && rune <= 0xfaff) ||
-    (rune >= 0x20000 && rune <= 0x3ffff);
-
-/// 中英文标点，含全角形式；刻意不含全角字母和数字。
-bool _isPunctuation(int rune) =>
-    (rune >= 0x21 && rune <= 0x2f) ||
-    (rune >= 0x3a && rune <= 0x40) ||
-    (rune >= 0x5b && rune <= 0x60) ||
-    (rune >= 0x7b && rune <= 0x7e) ||
-    (rune >= 0x2010 && rune <= 0x2027) ||
-    (rune >= 0x3001 && rune <= 0x303f) ||
-    (rune >= 0xfe10 && rune <= 0xfe6f) ||
-    (rune >= 0xff01 && rune <= 0xff20) ||
-    (rune >= 0xff3b && rune <= 0xff40) ||
-    (rune >= 0xff5b && rune <= 0xff65);
+int _normalizeCjkRadical(int rune) {
+  if (rune >= 0x2f00 && rune <= 0x2fd5) {
+    return _kangxiRadicalTargets.codeUnitAt(rune - 0x2f00);
+  }
+  return _cjkRadicalSupplementTargets[rune] ?? rune;
+}
 
 /// 零宽字符：本身合法，所以不算乱码证据，但没有阅读价值，清洗时丢掉。
 bool _isInvisible(int rune) =>

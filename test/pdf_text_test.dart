@@ -50,17 +50,15 @@ void main() {
       expect(isGarbledPdfText('$body${_repeat(0xe600, 2)}'), isFalse);
     });
 
-    test('flags a long Chinese page that has no punctuation at all', () {
-      // CMap 整体错位：映射出的全是合法汉字，但连标点都变成了汉字。
-      final scrambled = '蹴罅骈氅犒糅畲耨镤黻鬻纛饕' * 12;
-      expect(scrambled.length, greaterThan(100));
-      expect(isGarbledPdfText(scrambled), isTrue);
-    });
-
-    test('keeps an unpunctuated line that is merely short', () {
-      // 标题、书名和目录条目没有标点很正常，不能因此判定乱码。
-      expect(isGarbledPdfText('茶峒地方凭水依山筑城'), isFalse);
-    });
+    test(
+      'keeps normal Chinese even when an entire page has no punctuation',
+      () {
+        // 古籍、目录和逐行排版都可能没有标点，不能因此退回到更差的 OCR。
+        final classicalText = '大学之道在明明德在亲民在止于至善' * 12;
+        expect(classicalText.length, greaterThan(100));
+        expect(isGarbledPdfText(classicalText), isFalse);
+      },
+    );
 
     test('keeps a long Chinese page that is normally punctuated', () {
       final prose = '溪边的白塔静静立着，渡船随水波轻轻晃动，像是在等一个迟迟未归的人。' * 5;
@@ -101,6 +99,20 @@ void main() {
       expect(cleanPdfPageText('溪 边 的 白 塔 静 静 立 着'), '溪边的白塔静静立着');
       expect(cleanPdfPageText('渡船 随水波 轻轻晃动 ，像是 在等人。'), '渡船随水波轻轻晃动，像是在等人。');
     });
+
+    test('normalizes Kangxi radicals emitted for ordinary ideographs', () {
+      expect(cleanPdfPageText('⽬录、中⽂版序、⼯作原则、⼈⽣原则'), '目录、中文版序、工作原则、人生原则');
+    });
+
+    test(
+      'normalizes simplified CJK radical forms found in PDF text layers',
+      () {
+        expect(
+          cleanPdfPageText('⺟亲、⺠主、⻄方、看⻅、成⻓、⻘年、⻚面、⻛险'),
+          '母亲、民主、西方、看见、成长、青年、页面、风险',
+        );
+      },
+    );
 
     test('keeps spaces between Latin words', () {
       expect(cleanPdfPageText('I  went   to the woods'), 'I went to the woods');

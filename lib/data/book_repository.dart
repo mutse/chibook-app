@@ -41,13 +41,12 @@ class BookRepository {
     }
     try {
       final documents = await getApplicationDocumentsDirectory();
-      final books = decoded
-          .map(
-            (book) => book.copyWith(
-              filePath: resolveBookFilePath(book.filePath, documents.path),
-            ),
-          )
-          .toList();
+      final books = decoded.map((book) {
+        final repaired = _cleanStoredPdfText(book);
+        return repaired.copyWith(
+          filePath: resolveBookFilePath(book.filePath, documents.path),
+        );
+      }).toList();
       final portable = books
           .map(
             (book) => book.copyWith(
@@ -251,6 +250,21 @@ class BookRepository {
     } finally {
       await document?.dispose();
     }
+  }
+
+  /// 旧版本已经把 PDF 文字层存进 SharedPreferences；修复提取逻辑并不会重新
+  /// 触碰这些章节。启动时用幂等清洗迁移一次，用户无需删除并重新导入 PDF。
+  Book _cleanStoredPdfText(Book book) {
+    if (book.format != BookFormat.pdf || book.chapters.isEmpty) return book;
+    var changed = false;
+    final chapters = book.chapters.map((chapter) {
+      final content = cleanPdfPageText(chapter.content);
+      changed = changed || content != chapter.content;
+      return content == chapter.content
+          ? chapter
+          : Chapter(title: chapter.title, content: content);
+    }).toList();
+    return changed ? book.copyWith(chapters: chapters) : book;
   }
 
   Future<Book> _readEpub({

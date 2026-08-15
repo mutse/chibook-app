@@ -2,6 +2,24 @@ import 'package:chibook/core/models.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('book copyWith can replace persisted PDF chapters', () {
+    const original = Book(
+      id: 'pdf-1',
+      title: '原则',
+      author: '本地文档',
+      format: BookFormat.pdf,
+      coverColor: 0xff000000,
+      chapters: [Chapter(title: '第 1 页', content: '⽬录')],
+    );
+
+    final repaired = original.copyWith(
+      chapters: const [Chapter(title: '第 1 页', content: '目录')],
+    );
+
+    expect(repaired.chapters.single.content, '目录');
+    expect(original.chapters.single.content, '⽬录');
+  });
+
   test('book persistence keeps format, chapter and progress', () {
     const book = Book(
       id: 'local-1',

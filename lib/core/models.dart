@@ -52,6 +52,7 @@ class Book {
   final DateTime? lastOpenedAt;
 
   Book copyWith({
+    List<Chapter>? chapters,
     String? filePath,
     int? chapterIndex,
     double? progress,
@@ -63,7 +64,7 @@ class Book {
     author: author,
     format: format,
     coverColor: coverColor,
-    chapters: chapters,
+    chapters: chapters ?? this.chapters,
     filePath: filePath ?? this.filePath,
     chapterIndex: chapterIndex ?? this.chapterIndex,
     progress: progress ?? this.progress,

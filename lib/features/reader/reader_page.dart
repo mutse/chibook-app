@@ -1237,21 +1237,12 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
     children: [
       PdfViewer.file(
         book.filePath!,
-        // Imported books are complete local files. Avoid the progressive page
-        // state machine used by range/sparse sources; a failed background page
-        // transition is otherwise swallowed by pdfrx and leaves a white page.
-        useProgressiveLoading: false,
         controller: _pdfController,
         initialPageNumber: initialPdfPageNumber(
           chapterIndex: book.chapterIndex,
           knownPageCount: book.chapters.length,
         ),
         params: PdfViewerParams(
-          // Some PDFs cannot render with PDFium's limited image-cache flag.
-          // pdfrx intentionally ignores page.render errors, so the symptom is
-          // a blank white sheet rather than an error banner. The compatibility
-          // cache path is more reliable for user-imported documents.
-          limitRenderingCache: false,
           loadingBannerBuilder: (_, _, _) =>
               const Center(child: CircularProgressIndicator()),
           errorBannerBuilder: (context, error, _, documentRef) => _PdfLoadError(
