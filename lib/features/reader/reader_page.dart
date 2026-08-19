@@ -13,6 +13,7 @@ import '../../core/pdf_page.dart';
 import '../../core/reading_follow.dart';
 import '../../core/sentence_bounds.dart';
 import '../../core/theme.dart';
+import '../../services/pdf_font_service.dart';
 import '../../services/tts_audio_handler.dart';
 
 class ReaderPage extends ConsumerWidget {
@@ -1359,6 +1360,7 @@ class _PdfReaderPageState extends ConsumerState<PdfReaderPage> {
     children: [
       PdfViewer.file(
         book.filePath!,
+        fontManager: Platform.isAndroid ? androidPdfFontManager : null,
         controller: _pdfController,
         initialPageNumber: initialPdfPageNumber(
           chapterIndex: book.chapterIndex,
