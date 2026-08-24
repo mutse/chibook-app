@@ -4,8 +4,10 @@ import 'package:uuid/uuid.dart';
 import '../core/models.dart';
 import '../data/book_repository.dart';
 import '../services/cloud_tts_service.dart';
+import '../services/weread_service.dart';
 
 final bookRepositoryProvider = Provider((ref) => BookRepository());
+final weReadServiceProvider = Provider((ref) => WeReadService());
 
 final appControllerProvider = NotifierProvider<AppController, AppState>(
   AppController.new,
@@ -23,6 +25,9 @@ class AppState {
     this.audioProgress = const [],
     this.listeningRecords = const [],
     this.recentSearches = const ['沈从文', '人间词话', '鲁迅', '瓦尔登湖'],
+    this.weReadAccount,
+    this.isWeReadSyncing = false,
+    this.weReadError,
   });
 
   final List<Book> books;
@@ -35,6 +40,9 @@ class AppState {
   final List<AudioProgress> audioProgress;
   final List<ListeningRecord> listeningRecords;
   final List<String> recentSearches;
+  final WeReadAccount? weReadAccount;
+  final bool isWeReadSyncing;
+  final String? weReadError;
 
   AppState copyWith({
     List<Book>? books,
@@ -48,6 +56,11 @@ class AppState {
     List<AudioProgress>? audioProgress,
     List<ListeningRecord>? listeningRecords,
     List<String>? recentSearches,
+    WeReadAccount? weReadAccount,
+    bool clearWeReadAccount = false,
+    bool? isWeReadSyncing,
+    String? weReadError,
+    bool clearWeReadError = false,
   }) => AppState(
     books: books ?? this.books,
     settings: settings ?? this.settings,
@@ -61,6 +74,11 @@ class AppState {
     audioProgress: audioProgress ?? this.audioProgress,
     listeningRecords: listeningRecords ?? this.listeningRecords,
     recentSearches: recentSearches ?? this.recentSearches,
+    weReadAccount: clearWeReadAccount
+        ? null
+        : (weReadAccount ?? this.weReadAccount),
+    isWeReadSyncing: isWeReadSyncing ?? this.isWeReadSyncing,
+    weReadError: clearWeReadError ? null : (weReadError ?? this.weReadError),
   );
 }
 
@@ -70,6 +88,9 @@ class AppController extends Notifier<AppState> {
   BookRepository get _repository => ref.read(bookRepositoryProvider);
   final _credentials = const TtsCredentialStore();
   final _cloudTts = CloudTtsService();
+  final Map<String, Future<void>> _weReadCatalogLoads = {};
+  final Map<String, Future<void>> _weReadChapterLoads = {};
+  WeReadService get _weRead => ref.read(weReadServiceProvider);
 
   @override
   AppState build() {
@@ -86,6 +107,7 @@ class AppController extends Notifier<AppState> {
         _repository.loadTtsSettings(),
         _repository.loadAudioProgress(),
         _repository.loadListeningRecords(),
+        _restoreWeReadAccountSafely(),
       ]);
       final books = values[0] as List<Book>;
       final bookIds = books.map((book) => book.id).toSet();
@@ -110,6 +132,7 @@ class AppController extends Notifier<AppState> {
         ttsSettings: ttsSettings,
         audioProgress: audioProgress,
         listeningRecords: listeningRecords,
+        weReadAccount: values[6] as WeReadAccount?,
         initialized: true,
       );
       // 孤儿记录（书籍已删除）过滤后写回磁盘，否则只在内存生效，下次启动仍会读到。
@@ -126,6 +149,210 @@ class AppController extends Notifier<AppState> {
   }
 
   void setGrid(bool value) => state = state.copyWith(isGrid: value);
+
+  Future<WeReadAccount?> _restoreWeReadAccountSafely() async {
+    try {
+      return await _weRead.restoreAccount();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<WeReadLoginSession> startWeReadLogin() => _weRead.startLogin();
+
+  Future<void> completeWeReadLogin(
+    WeReadLoginSession session, {
+    String otp = '',
+  }) async {
+    final account = await _weRead.completeLogin(session, otp: otp);
+    state = state.copyWith(weReadAccount: account, clearWeReadError: true);
+    await syncWeReadShelf();
+  }
+
+  Future<void> syncWeReadShelf() async {
+    if (state.isWeReadSyncing) return;
+    state = state.copyWith(isWeReadSyncing: true, clearWeReadError: true);
+    try {
+      final incoming = await _weRead.syncShelf();
+      final localBooks = state.books
+          .where((book) => book.source == BookSource.local)
+          .toList();
+      final existing = {
+        for (final book in state.books.where(
+          (book) => book.source == BookSource.weread,
+        ))
+          book.remoteId: book,
+      };
+      final remoteBooks = incoming.map((fresh) {
+        final previous = existing[fresh.remoteId];
+        if (previous == null) return fresh;
+        final newestOpened = switch ((
+          fresh.lastOpenedAt,
+          previous.lastOpenedAt,
+        )) {
+          (final DateTime freshTime, final DateTime previousTime) =>
+            freshTime.isAfter(previousTime) ? freshTime : previousTime,
+          (final DateTime freshTime, null) => freshTime,
+          (null, final DateTime previousTime) => previousTime,
+          _ => null,
+        };
+        return fresh.copyWith(
+          chapters: previous.chapters,
+          chapterIndex: previous.chapterIndex,
+          progress: fresh.progress > previous.progress
+              ? fresh.progress
+              : previous.progress,
+          isPinned: previous.isPinned,
+          lastOpenedAt: newestOpened,
+          remoteFormat: fresh.remoteFormat ?? previous.remoteFormat,
+          coverUrl: fresh.coverUrl ?? previous.coverUrl,
+        );
+      }).toList();
+      state = state.copyWith(
+        books: [...remoteBooks, ...localBooks],
+        isWeReadSyncing: false,
+        clearWeReadError: true,
+      );
+      await _repository.saveBooks(state.books);
+    } catch (error) {
+      state = state.copyWith(
+        isWeReadSyncing: false,
+        weReadError: error.toString(),
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> prepareWeReadBook(String id) {
+    final running = _weReadCatalogLoads[id];
+    if (running != null) return running;
+    final future = _prepareWeReadBook(id);
+    _weReadCatalogLoads[id] = future;
+    future.then(
+      (_) => _weReadCatalogLoads.remove(id),
+      onError: (_, _) => _weReadCatalogLoads.remove(id),
+    );
+    return future;
+  }
+
+  Future<void> _prepareWeReadBook(String id) async {
+    final book = state.books.where((value) => value.id == id).firstOrNull;
+    if (book == null || book.source != BookSource.weread) return;
+    if (book.chapters.isNotEmpty) return;
+    final remoteId = book.remoteId;
+    if (remoteId == null) throw const WeReadException('缺少微信读书书籍 ID');
+    final catalog = await _weRead.loadCatalog(remoteId);
+    final remoteChapterIndex = catalog.currentChapterUid == null
+        ? -1
+        : catalog.chapters.indexWhere(
+            (chapter) => chapter.remoteUid == catalog.currentChapterUid,
+          );
+    final resumeChapter = remoteChapterIndex >= 0
+        ? remoteChapterIndex
+        : book.chapterIndex.clamp(0, catalog.chapters.length - 1);
+    state = state.copyWith(
+      books: state.books
+          .map(
+            (value) => value.id == id
+                ? value.copyWith(
+                    title: catalog.title,
+                    author: catalog.author,
+                    coverUrl: catalog.coverUrl,
+                    remoteFormat: catalog.format,
+                    chapters: catalog.chapters,
+                    chapterIndex: resumeChapter,
+                    progress: catalog.progress > value.progress
+                        ? catalog.progress
+                        : value.progress,
+                  )
+                : value,
+          )
+          .toList(),
+    );
+    await _repository.saveBooks(state.books);
+  }
+
+  Future<void> loadWeReadChapter(String id, int chapterIndex) {
+    final key = '$id:$chapterIndex';
+    final running = _weReadChapterLoads[key];
+    if (running != null) return running;
+    final future = _loadWeReadChapter(id, chapterIndex);
+    _weReadChapterLoads[key] = future;
+    future.then(
+      (_) => _weReadChapterLoads.remove(key),
+      onError: (_, _) => _weReadChapterLoads.remove(key),
+    );
+    return future;
+  }
+
+  Future<void> _loadWeReadChapter(String id, int chapterIndex) async {
+    var book = state.books.where((value) => value.id == id).firstOrNull;
+    if (book == null || book.source != BookSource.weread) return;
+    if (book.chapters.isEmpty) {
+      await prepareWeReadBook(id);
+      book = state.books.where((value) => value.id == id).firstOrNull;
+    }
+    if (book == null ||
+        chapterIndex < 0 ||
+        chapterIndex >= book.chapters.length) {
+      return;
+    }
+    final chapter = book.chapters[chapterIndex];
+    if (chapter.isLoaded) return;
+    final remoteId = book.remoteId;
+    final remoteUid = chapter.remoteUid;
+    if (remoteId == null || remoteUid == null) {
+      throw const WeReadException('缺少微信读书章节信息');
+    }
+    final content = await _weRead.loadChapter(
+      bookId: remoteId,
+      chapterUid: remoteUid,
+      format: book.remoteFormat,
+    );
+    if (content.trim().isEmpty) {
+      throw const WeReadException('这一章没有可读取的文字内容');
+    }
+    final chapters = book.chapters.toList();
+    chapters[chapterIndex] = chapter.copyWith(content: content, isLoaded: true);
+    state = state.copyWith(
+      books: state.books
+          .map(
+            (value) =>
+                value.id == id ? value.copyWith(chapters: chapters) : value,
+          )
+          .toList(),
+    );
+  }
+
+  Future<void> logoutWeRead() async {
+    await _weRead.logout();
+    final removedIds = state.books
+        .where((book) => book.source == BookSource.weread)
+        .map((book) => book.id)
+        .toSet();
+    state = state.copyWith(
+      books: state.books
+          .where((book) => book.source == BookSource.local)
+          .toList(),
+      highlights: state.highlights
+          .where((item) => !removedIds.contains(item.bookId))
+          .toList(),
+      audioProgress: state.audioProgress
+          .where((item) => !removedIds.contains(item.bookId))
+          .toList(),
+      listeningRecords: state.listeningRecords
+          .where((item) => !removedIds.contains(item.bookId))
+          .toList(),
+      clearWeReadAccount: true,
+      clearWeReadError: true,
+    );
+    await Future.wait([
+      _repository.saveBooks(state.books),
+      _repository.saveHighlights(state.highlights),
+      _repository.saveAudioProgress(state.audioProgress),
+      _repository.saveListeningRecords(state.listeningRecords),
+    ]);
+  }
 
   Future<bool> importBook({BookFormat? format}) async {
     final book = await _repository.importBook(format: format);

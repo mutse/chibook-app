@@ -28,8 +28,80 @@ class ReaderPage extends ConsumerWidget {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final book = matches.first;
+    if (book.source == BookSource.weread && book.chapters.isEmpty) {
+      return _WeReadCatalogLoader(bookId: book.id, title: book.title);
+    }
     if (book.format == BookFormat.pdf) return PdfReaderPage(book: book);
     return ReflowReaderPage(book: book);
+  }
+}
+
+class _WeReadCatalogLoader extends ConsumerStatefulWidget {
+  const _WeReadCatalogLoader({required this.bookId, required this.title});
+
+  final String bookId;
+  final String title;
+
+  @override
+  ConsumerState<_WeReadCatalogLoader> createState() =>
+      _WeReadCatalogLoaderState();
+}
+
+class _WeReadCatalogLoaderState extends ConsumerState<_WeReadCatalogLoader> {
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(widget.title)),
+    body: Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: _error == null
+            ? const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('正在加载微信读书目录…'),
+                ],
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.cloud_off_outlined,
+                    size: 52,
+                    color: AppColors.graphite,
+                  ),
+                  const SizedBox(height: 14),
+                  Text(_error.toString(), textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重试'),
+                  ),
+                ],
+              ),
+      ),
+    ),
+  );
+
+  Future<void> _load() async {
+    setState(() => _error = null);
+    try {
+      await ref
+          .read(appControllerProvider.notifier)
+          .prepareWeReadBook(widget.bookId);
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
   }
 }
 
@@ -78,6 +150,11 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
       widget.book.chapters.length - 1,
     );
     _pages = PageController(initialPage: _chapter);
+    if (widget.book.source == BookSource.weread) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _loadRemoteChapter(_chapter),
+      );
+    }
     if (ttsAudioHandler.currentBookId == widget.book.id) {
       _spokenChapter = ttsAudioHandler.currentChapter;
       _spokenStart = _spokenEnd = ttsAudioHandler.characterOffset;
@@ -214,6 +291,9 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                             index,
                             (index + 1) / widget.book.chapters.length,
                           );
+                      if (widget.book.source == BookSource.weread) {
+                        _loadRemoteChapter(index);
+                      }
                     },
                     itemBuilder: (_, index) => _ChapterPage(
                       bookId: widget.book.id,
@@ -230,6 +310,9 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
                       autoFollow: _playing && _spokenChapter == index,
                       onSpeakFrom: (offset) => _speakFrom(index, offset),
                       onUserScroll: _holdFollow,
+                      onRetry: widget.book.source == BookSource.weread
+                          ? () => _loadRemoteChapter(index)
+                          : null,
                     ),
                   ),
                 ),
@@ -259,20 +342,21 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
               onSettings: _showSettings,
               showContents: !form.hasSidebar,
             ),
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 240),
-              right: 16,
-              bottom: _chrome ? 104 : 30,
-              child: FloatingActionButton.extended(
-                heroTag: 'listen-${widget.book.id}',
-                onPressed: () =>
-                    context.push('/player/${widget.book.id}?from=reader'),
-                backgroundColor: AppColors.bamboo,
-                foregroundColor: Colors.white,
-                icon: const Icon(Icons.play_arrow_rounded, size: 19),
-                label: const Text('听书'),
+            if (widget.book.source == BookSource.local)
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 240),
+                right: 16,
+                bottom: _chrome ? 104 : 30,
+                child: FloatingActionButton.extended(
+                  heroTag: 'listen-${widget.book.id}',
+                  onPressed: () =>
+                      context.push('/player/${widget.book.id}?from=reader'),
+                  backgroundColor: AppColors.bamboo,
+                  foregroundColor: Colors.white,
+                  icon: const Icon(Icons.play_arrow_rounded, size: 19),
+                  label: const Text('听书'),
+                ),
               ),
-            ),
             if (_playing && _spokenChapter != null)
               Positioned(
                 top: MediaQuery.paddingOf(context).top + 10,
@@ -284,6 +368,19 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
       );
     },
   );
+
+  Future<void> _loadRemoteChapter(int chapterIndex) async {
+    try {
+      await ref
+          .read(appControllerProvider.notifier)
+          .loadWeReadChapter(widget.book.id, chapterIndex);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
 
   /// 跳章统一入口：侧栏与目录弹层共用，避免出现两套跳转逻辑。
   void _jumpToChapter(int index) {
@@ -454,6 +551,7 @@ class _ChapterPage extends StatefulWidget {
     required this.autoFollow,
     required this.onSpeakFrom,
     required this.onUserScroll,
+    this.onRetry,
   });
   final String bookId;
   final Chapter chapter;
@@ -471,6 +569,7 @@ class _ChapterPage extends StatefulWidget {
 
   /// 用户拖动正文时通知上层，让章节级自动翻页一并让位。
   final VoidCallback onUserScroll;
+  final VoidCallback? onRetry;
 
   @override
   State<_ChapterPage> createState() => _ChapterPageState();
@@ -524,7 +623,138 @@ class _ChapterPageState extends State<_ChapterPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) => widget.chapter.isLoaded
+      ? Padding(
+          padding: const EdgeInsets.fromLTRB(25, 58, 25, 22),
+          child: Column(
+            children: [
+              Text(
+                widget.chapter.title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: widget.color,
+                  fontWeight: FontWeight.w800,
+                  fontSize: widget.settings.fontSize + 2,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Expanded(
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    // dragDetails 非空才是用户手指拖动；自动跟随的 animateTo
+                    // 不带 dragDetails，不会误触发让位。
+                    final isUserDrag = switch (notification) {
+                      ScrollStartNotification(:final dragDetails) =>
+                        dragDetails != null,
+                      ScrollUpdateNotification(:final dragDetails) =>
+                        dragDetails != null,
+                      _ => false,
+                    };
+                    if (isUserDrag) {
+                      _userScrollHoldUntil = DateTime.now().add(
+                        const Duration(seconds: 4),
+                      );
+                      _lastFollowTarget = null;
+                      _lastFollowSentenceStart = null;
+                      widget.onUserScroll();
+                    }
+                    return false;
+                  },
+                  child: SingleChildScrollView(
+                    controller: _scroll,
+                    child: SelectableText.rich(
+                      _textSpan(),
+                      key: _textKey,
+                      contextMenuBuilder: (context, editableState) {
+                        final selection =
+                            editableState.textEditingValue.selection;
+                        Future<void> save({required bool withNote}) async {
+                          if (!selection.isValid || selection.isCollapsed) {
+                            return;
+                          }
+                          final start = selection.start.clamp(
+                            0,
+                            widget.chapter.content.length,
+                          );
+                          final end = selection.end.clamp(
+                            start,
+                            widget.chapter.content.length,
+                          );
+                          final excerpt = widget.chapter.content.substring(
+                            start,
+                            end,
+                          );
+                          String? note;
+                          if (withNote) {
+                            note = await _requestNote(context);
+                            if (note == null || !context.mounted) return;
+                          }
+                          await ProviderScope.containerOf(context)
+                              .read(appControllerProvider.notifier)
+                              .addHighlight(
+                                bookId: widget.bookId,
+                                excerpt: excerpt,
+                                location: ReadingLocation.text(
+                                  chapterIndex: widget.chapterIndex,
+                                  startOffset: start,
+                                  endOffset: end,
+                                ),
+                                note: note,
+                              );
+                          editableState.hideToolbar();
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(withNote ? '笔记已保存' : '划线已保存'),
+                              ),
+                            );
+                          }
+                        }
+
+                        return AdaptiveTextSelectionToolbar.buttonItems(
+                          anchors: editableState.contextMenuAnchors,
+                          buttonItems: [
+                            ...editableState.contextMenuButtonItems,
+                            ContextMenuButtonItem(
+                              label: '朗读',
+                              onPressed: () {
+                                if (!selection.isValid) return;
+                                final start = selection.start.clamp(
+                                  0,
+                                  widget.chapter.content.length,
+                                );
+                                editableState.hideToolbar();
+                                widget.onSpeakFrom(start);
+                              },
+                            ),
+                            ContextMenuButtonItem(
+                              label: '划线',
+                              onPressed: () => save(withNote: false),
+                            ),
+                            ContextMenuButtonItem(
+                              label: '笔记',
+                              onPressed: () => save(withNote: true),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              Text(
+                '${widget.page} / ${widget.count}',
+                style: TextStyle(
+                  color: widget.color.withValues(alpha: .52),
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
+        )
+      : _loadingPlaceholder();
+
+  Widget _loadingPlaceholder() => Padding(
     padding: const EdgeInsets.fromLTRB(25, 58, 25, 22),
     child: Column(
       children: [
@@ -537,105 +767,11 @@ class _ChapterPageState extends State<_ChapterPage> {
             fontSize: widget.settings.fontSize + 2,
           ),
         ),
-        const SizedBox(height: 24),
-        Expanded(
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (notification) {
-              // dragDetails 非空才是用户手指拖动；自动跟随的 animateTo
-              // 不带 dragDetails，不会误触发让位。
-              final isUserDrag = switch (notification) {
-                ScrollStartNotification(:final dragDetails) =>
-                  dragDetails != null,
-                ScrollUpdateNotification(:final dragDetails) =>
-                  dragDetails != null,
-                _ => false,
-              };
-              if (isUserDrag) {
-                _userScrollHoldUntil = DateTime.now().add(
-                  const Duration(seconds: 4),
-                );
-                _lastFollowTarget = null;
-                _lastFollowSentenceStart = null;
-                widget.onUserScroll();
-              }
-              return false;
-            },
-            child: SingleChildScrollView(
-              controller: _scroll,
-              child: SelectableText.rich(
-                _textSpan(),
-                key: _textKey,
-                contextMenuBuilder: (context, editableState) {
-                  final selection = editableState.textEditingValue.selection;
-                  Future<void> save({required bool withNote}) async {
-                    if (!selection.isValid || selection.isCollapsed) return;
-                    final start = selection.start.clamp(
-                      0,
-                      widget.chapter.content.length,
-                    );
-                    final end = selection.end.clamp(
-                      start,
-                      widget.chapter.content.length,
-                    );
-                    final excerpt = widget.chapter.content.substring(
-                      start,
-                      end,
-                    );
-                    String? note;
-                    if (withNote) {
-                      note = await _requestNote(context);
-                      if (note == null || !context.mounted) return;
-                    }
-                    await ProviderScope.containerOf(context)
-                        .read(appControllerProvider.notifier)
-                        .addHighlight(
-                          bookId: widget.bookId,
-                          excerpt: excerpt,
-                          location: ReadingLocation.text(
-                            chapterIndex: widget.chapterIndex,
-                            startOffset: start,
-                            endOffset: end,
-                          ),
-                          note: note,
-                        );
-                    editableState.hideToolbar();
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(withNote ? '笔记已保存' : '划线已保存')),
-                      );
-                    }
-                  }
-
-                  return AdaptiveTextSelectionToolbar.buttonItems(
-                    anchors: editableState.contextMenuAnchors,
-                    buttonItems: [
-                      ...editableState.contextMenuButtonItems,
-                      ContextMenuButtonItem(
-                        label: '朗读',
-                        onPressed: () {
-                          if (!selection.isValid) return;
-                          final start = selection.start.clamp(
-                            0,
-                            widget.chapter.content.length,
-                          );
-                          editableState.hideToolbar();
-                          widget.onSpeakFrom(start);
-                        },
-                      ),
-                      ContextMenuButtonItem(
-                        label: '划线',
-                        onPressed: () => save(withNote: false),
-                      ),
-                      ContextMenuButtonItem(
-                        label: '笔记',
-                        onPressed: () => save(withNote: true),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
+        const Expanded(child: Center(child: CircularProgressIndicator())),
+        TextButton.icon(
+          onPressed: widget.onRetry,
+          icon: const Icon(Icons.refresh),
+          label: const Text('重新加载章节'),
         ),
         Text(
           '${widget.page} / ${widget.count}',

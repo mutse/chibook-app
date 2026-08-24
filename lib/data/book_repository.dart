@@ -72,13 +72,24 @@ class BookRepository {
 
   Future<void> saveBooks(List<Book> books) async {
     final documents = await getApplicationDocumentsDirectory();
-    final portable = books
-        .map(
-          (book) => book.copyWith(
-            filePath: persistableBookFilePath(book.filePath, documents.path),
-          ),
-        )
-        .toList();
+    final portable = books.map((book) {
+      final persistedChapters = book.source == BookSource.weread
+          ? book.chapters
+                .map(
+                  (chapter) => Chapter(
+                    title: chapter.title,
+                    content: '',
+                    remoteUid: chapter.remoteUid,
+                    isLoaded: false,
+                  ),
+                )
+                .toList()
+          : book.chapters;
+      return book.copyWith(
+        chapters: persistedChapters,
+        filePath: persistableBookFilePath(book.filePath, documents.path),
+      );
+    }).toList();
     await _preferences.setString(_booksKey, encodeBooks(portable));
   }
 

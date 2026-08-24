@@ -48,35 +48,44 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(18, 4, 18, 30),
             children: [
-              const Row(
+              Row(
                 children: [
                   CircleAvatar(
                     radius: 29,
                     backgroundColor: AppColors.ink,
-                    child: Text(
-                      '游',
-                      style: TextStyle(
-                        color: Color(0xFFF3DAD3),
-                        fontWeight: FontWeight.w800,
-                        fontSize: 21,
-                      ),
-                    ),
+                    backgroundImage: state.weReadAccount?.avatarUrl == null
+                        ? null
+                        : NetworkImage(state.weReadAccount!.avatarUrl!),
+                    child: state.weReadAccount?.avatarUrl == null
+                        ? Text(
+                            state.weReadAccount?.name.isNotEmpty == true
+                                ? state.weReadAccount!.name.substring(0, 1)
+                                : '游',
+                            style: const TextStyle(
+                              color: Color(0xFFF3DAD3),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 21,
+                            ),
+                          )
+                        : null,
                   ),
-                  SizedBox(width: 14),
+                  const SizedBox(width: 14),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '游客读者',
-                        style: TextStyle(
+                        state.weReadAccount?.name ?? '游客读者',
+                        style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 19,
                         ),
                       ),
-                      SizedBox(height: 3),
+                      const SizedBox(height: 3),
                       Text(
-                        '所有数据仅保存在本机',
-                        style: TextStyle(
+                        state.weReadAccount == null
+                            ? '本地阅读数据仅保存在本机'
+                            : '微信读书书架已连接',
+                        style: const TextStyle(
                           color: AppColors.graphite,
                           fontSize: 11,
                         ),
@@ -146,6 +155,12 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               const SizedBox(height: 18),
               _SettingsCard(
                 children: [
+                  _SettingTile(
+                    icon: Icons.auto_stories_outlined,
+                    title: '微信读书',
+                    value: state.weReadAccount?.name ?? '未登录',
+                    onTap: () => context.push('/settings/weread'),
+                  ),
                   _SettingTile(
                     icon: Icons.edit_note,
                     title: '我的笔记与划线',

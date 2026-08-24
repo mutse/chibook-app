@@ -40,6 +40,44 @@ void main() {
     expect(decoded.progress, .5);
   });
 
+  test('WeRead book persistence keeps remote metadata without old clients', () {
+    const book = Book(
+      id: 'weread:3300144307',
+      title: '从零构建大模型',
+      author: '作者',
+      format: BookFormat.epub,
+      coverColor: 0xFF3F5B4E,
+      source: BookSource.weread,
+      remoteId: '3300144307',
+      coverUrl: 'https://cdn.weread.qq.com/cover.jpg',
+      remoteFormat: 'epub',
+      chapters: [
+        Chapter(title: '第一章', content: '', remoteUid: 44, isLoaded: false),
+      ],
+    );
+
+    final decoded = decodeBooks(encodeBooks([book])).single;
+
+    expect(decoded.source, BookSource.weread);
+    expect(decoded.remoteId, '3300144307');
+    expect(decoded.coverUrl, contains('weread.qq.com'));
+    expect(decoded.chapters.single.remoteUid, 44);
+    expect(decoded.chapters.single.isLoaded, isFalse);
+  });
+
+  test('legacy book JSON defaults to local source', () {
+    final decoded = Book.fromJson(const {
+      'id': 'legacy',
+      'title': '旧书',
+      'author': '作者',
+      'format': 'epub',
+      'coverColor': 0xFF000000,
+      'chapters': <Object?>[],
+    });
+
+    expect(decoded.source, BookSource.local);
+  });
+
   test('reading location supports text and PDF coordinates', () {
     const text = ReadingLocation.text(
       chapterIndex: 2,

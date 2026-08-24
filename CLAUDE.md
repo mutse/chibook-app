@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-chibook is a local-first Flutter reading + text-to-speech ("听书") app for Android/iOS. Books, progress, highlights and settings live only on the device — there is no bookstore, account, social layer, or cloud sync. UI strings and project docs are in Chinese.
+chibook is a local-first Flutter reading + text-to-speech ("听书") app for Android/iOS. Imported books, highlights and settings live only on the device. An optional WeRead integration adds QR login, the user's remote shelf, and on-demand chapter reading; there is still no bookstore or social layer. UI strings and project docs are in Chinese.
 
 Two docs define intent and are worth reading before non-trivial work:
 - `README.md` — implemented feature list and the reasoning behind the EPUB/PDF/TTS trade-offs.
@@ -63,6 +63,10 @@ Imports copy the picked file into `<appDocuments>/library/<uuid>.<ext>` and pars
 - **PDF** — per-page text extraction filtered through `lib/core/pdf_text.dart`. `isGarbledPdfText` rejects a page whose font has no ToUnicode CMap (PDFium then returns NUL/PUA code points — non-empty but unreadable, very common in Chinese PDFs); `cleanPdfPageText` normalizes both the text layer and the OCR result (drops unmapped glyphs, removes PDFium's inter-ideograph spaces, rejoins hard-wrapped lines). Empty **and** garbled pages fall back to on-device Google ML Kit Chinese OCR (`lib/services/pdf_ocr_service.dart`, Android/iOS only); when OCR also comes back empty the page is stored empty on purpose — a garbled page must never be persisted, TTS would read it aloud. One page = one `Chapter`.
 
 `loadBooks()` returns `demoBooks` (bundled sample library) when nothing is stored or decoding fails.
+
+### WeRead integration
+
+`lib/services/weread_service.dart` owns the optional WeRead Web session, QR login protocol, shelf/catalog calls, content-shard signing and decoding. Cookies and account metadata live in `flutter_secure_storage`; never move them to SharedPreferences. Remote books use `BookSource.weread`, retain only metadata in `erdu.books.v1`, and load chapter text on demand through `AppController`. `BookRepository.saveBooks` deliberately strips remote chapter bodies before persistence. The Web content endpoints are compatibility interfaces rather than a stable public API, so failures must stay explicit and recoverable.
 
 ### TTS: local and cloud engines, one position model
 

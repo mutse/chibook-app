@@ -22,6 +22,25 @@ class ShelfPage extends ConsumerWidget {
         ),
         actions: [
           IconButton(
+            tooltip: state.weReadAccount == null ? '登录微信读书' : '同步微信读书书架',
+            onPressed: state.isWeReadSyncing
+                ? null
+                : () => state.weReadAccount == null
+                      ? context.push('/settings/weread')
+                      : _syncWeRead(context, ref),
+            icon: state.isWeReadSyncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    state.weReadAccount == null
+                        ? Icons.cloud_off_outlined
+                        : Icons.cloud_sync_outlined,
+                  ),
+          ),
+          IconButton(
             tooltip: '搜索',
             onPressed: () => context.push('/shelf/search'),
             icon: const Icon(Icons.search),
@@ -54,6 +73,23 @@ class ShelfPage extends ConsumerWidget {
         child: const Icon(Icons.add),
       ),
     );
+  }
+
+  Future<void> _syncWeRead(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref.read(appControllerProvider.notifier).syncWeReadShelf();
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('微信读书书架已同步')));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 
   Future<void> _showImport(BuildContext context, WidgetRef ref) async {
@@ -236,11 +272,28 @@ class _GridBook extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            book.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          Row(
+            children: [
+              if (book.source == BookSource.weread) ...[
+                const Icon(
+                  Icons.cloud_done_outlined,
+                  size: 12,
+                  color: AppColors.bamboo,
+                ),
+                const SizedBox(width: 3),
+              ],
+              Expanded(
+                child: Text(
+                  book.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
           ),
           Text(
             book.author,
@@ -281,7 +334,7 @@ class _BookList extends ConsumerWidget {
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             subtitle: Text(
-              '${book.author}\n已读 ${(book.progress * 100).round()}%',
+              '${book.author}\n${book.source == BookSource.weread ? '微信读书 · ' : ''}已读 ${(book.progress * 100).round()}%',
               style: const TextStyle(height: 1.6),
             ),
             isThreeLine: true,
@@ -303,38 +356,54 @@ class _BookCover extends StatelessWidget {
   final Book book;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(7),
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          Color(book.coverColor).withValues(alpha: .88),
-          Color(book.coverColor).withValues(alpha: .55),
-          const Color(0xFF1F201D),
+  Widget build(BuildContext context) {
+    final fallback = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(7),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(book.coverColor).withValues(alpha: .88),
+            Color(book.coverColor).withValues(alpha: .55),
+            const Color(0xFF1F201D),
+          ],
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 12,
+            offset: Offset(0, 7),
+          ),
         ],
       ),
-      boxShadow: const [
-        BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(0, 7)),
-      ],
-    ),
-    child: Padding(
-      padding: const EdgeInsets.all(10),
-      child: Align(
-        alignment: Alignment.bottomLeft,
-        child: Text(
-          book.title,
-          maxLines: 3,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w800,
-            height: 1.3,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Align(
+          alignment: Alignment.bottomLeft,
+          child: Text(
+            book.title,
+            maxLines: 3,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              height: 1.3,
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+    final coverUrl = book.coverUrl;
+    if (coverUrl == null || coverUrl.isEmpty) return fallback;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(7),
+      child: Image.network(
+        coverUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => fallback,
+      ),
+    );
+  }
 }
 
 class _ProgressSeal extends StatelessWidget {
@@ -445,11 +514,12 @@ Future<void> _bookMenu(BuildContext context, WidgetRef ref, Book book) async {
             title: Text(book.isPinned ? '取消置顶' : '置顶'),
             onTap: () => Navigator.pop(context, 'pin'),
           ),
-          ListTile(
-            leading: const Icon(Icons.headphones_outlined),
-            title: const Text('开始听书'),
-            onTap: () => Navigator.pop(context, 'listen'),
-          ),
+          if (book.source == BookSource.local)
+            ListTile(
+              leading: const Icon(Icons.headphones_outlined),
+              title: const Text('开始听书'),
+              onTap: () => Navigator.pop(context, 'listen'),
+            ),
           ListTile(
             leading: const Icon(Icons.delete_outline, color: AppColors.seal),
             title: const Text('从书架删除', style: TextStyle(color: AppColors.seal)),

@@ -2,6 +2,8 @@ import 'dart:convert';
 
 enum BookFormat { txt, epub, pdf }
 
+enum BookSource { local, weread }
+
 enum ReaderTheme { light, dark, eye }
 
 enum TtsProvider { builtin, aliyun, azure, openai }
@@ -11,16 +13,37 @@ enum PlaybackMode { sequential, reverse, repeatOne }
 enum ReadingLocationKind { textOffset, pdfRegion }
 
 class Chapter {
-  const Chapter({required this.title, required this.content});
+  const Chapter({
+    required this.title,
+    required this.content,
+    this.remoteUid,
+    this.isLoaded = true,
+  });
 
   final String title;
   final String content;
+  final int? remoteUid;
+  final bool isLoaded;
 
-  Map<String, Object?> toJson() => {'title': title, 'content': content};
+  Chapter copyWith({String? title, String? content, bool? isLoaded}) => Chapter(
+    title: title ?? this.title,
+    content: content ?? this.content,
+    remoteUid: remoteUid,
+    isLoaded: isLoaded ?? this.isLoaded,
+  );
+
+  Map<String, Object?> toJson() => {
+    'title': title,
+    'content': content,
+    'remoteUid': remoteUid,
+    'isLoaded': isLoaded,
+  };
 
   factory Chapter.fromJson(Map<String, Object?> json) => Chapter(
-    title: json['title']! as String,
-    content: json['content']! as String,
+    title: json['title'] as String? ?? '未命名章节',
+    content: json['content'] as String? ?? '',
+    remoteUid: json['remoteUid'] as int?,
+    isLoaded: json['isLoaded'] as bool? ?? true,
   );
 }
 
@@ -32,6 +55,10 @@ class Book {
     required this.format,
     required this.coverColor,
     required this.chapters,
+    this.source = BookSource.local,
+    this.remoteId,
+    this.coverUrl,
+    this.remoteFormat,
     this.filePath,
     this.chapterIndex = 0,
     this.progress = 0,
@@ -45,6 +72,10 @@ class Book {
   final BookFormat format;
   final int coverColor;
   final List<Chapter> chapters;
+  final BookSource source;
+  final String? remoteId;
+  final String? coverUrl;
+  final String? remoteFormat;
   final String? filePath;
   final int chapterIndex;
   final double progress;
@@ -52,7 +83,13 @@ class Book {
   final DateTime? lastOpenedAt;
 
   Book copyWith({
+    String? title,
+    String? author,
+    BookFormat? format,
+    int? coverColor,
     List<Chapter>? chapters,
+    String? coverUrl,
+    String? remoteFormat,
     String? filePath,
     int? chapterIndex,
     double? progress,
@@ -60,11 +97,15 @@ class Book {
     DateTime? lastOpenedAt,
   }) => Book(
     id: id,
-    title: title,
-    author: author,
-    format: format,
-    coverColor: coverColor,
+    title: title ?? this.title,
+    author: author ?? this.author,
+    format: format ?? this.format,
+    coverColor: coverColor ?? this.coverColor,
     chapters: chapters ?? this.chapters,
+    source: source,
+    remoteId: remoteId,
+    coverUrl: coverUrl ?? this.coverUrl,
+    remoteFormat: remoteFormat ?? this.remoteFormat,
     filePath: filePath ?? this.filePath,
     chapterIndex: chapterIndex ?? this.chapterIndex,
     progress: progress ?? this.progress,
@@ -79,6 +120,10 @@ class Book {
     'format': format.name,
     'coverColor': coverColor,
     'chapters': chapters.map((e) => e.toJson()).toList(),
+    'source': source.name,
+    'remoteId': remoteId,
+    'coverUrl': coverUrl,
+    'remoteFormat': remoteFormat,
     'filePath': filePath,
     'chapterIndex': chapterIndex,
     'progress': progress,
@@ -88,13 +133,25 @@ class Book {
 
   factory Book.fromJson(Map<String, Object?> json) => Book(
     id: json['id']! as String,
-    title: json['title']! as String,
-    author: json['author']! as String,
-    format: BookFormat.values.byName(json['format']! as String),
-    coverColor: json['coverColor']! as int,
-    chapters: (json['chapters']! as List<Object?>)
+    title: json['title'] as String? ?? '未命名书籍',
+    author: json['author'] as String? ?? '未知作者',
+    format:
+        BookFormat.values
+            .where((value) => value.name == json['format'])
+            .firstOrNull ??
+        BookFormat.epub,
+    coverColor: json['coverColor'] as int? ?? 0xFF3F5B4E,
+    chapters: (json['chapters'] as List<Object?>? ?? const [])
         .map((e) => Chapter.fromJson((e! as Map).cast<String, Object?>()))
         .toList(),
+    source:
+        BookSource.values
+            .where((value) => value.name == json['source'])
+            .firstOrNull ??
+        BookSource.local,
+    remoteId: json['remoteId'] as String?,
+    coverUrl: json['coverUrl'] as String?,
+    remoteFormat: json['remoteFormat'] as String?,
     filePath: json['filePath'] as String?,
     chapterIndex: json['chapterIndex'] as int? ?? 0,
     progress: (json['progress'] as num?)?.toDouble() ?? 0,
