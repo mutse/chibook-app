@@ -37,6 +37,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   PlaybackMode _mode = PlaybackMode.sequential;
   String? _timerLabel;
   bool _wasImmersive = false;
+  bool _initializing = true;
+  bool _loadingChapter = false;
+  String? _initializationError;
 
   Book? get _book {
     final matches = ref
@@ -55,15 +58,79 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     )..repeat(reverse: true);
     _enterImmersive();
     _timerLabel = _sleepLabelFromHandler();
-    Future.microtask(() async {
-      final book = _book;
-      if (book == null || book.chapters.isEmpty) return;
+    _playbackSubscription = ttsAudioHandler.playbackState.listen((value) {
+      if (!mounted) return;
+      setState(() {
+        _playing = value.playing;
+        if (value.playing) _loadingChapter = false;
+      });
+    });
+    _eventSubscription = ttsAudioHandler.customEvent.listen(_handleAudioEvent);
+    Future.microtask(_initializePlayer);
+  }
+
+  void _handleAudioEvent(dynamic event) {
+    if (!mounted || event is! Map || event['bookId'] != widget.bookId) return;
+    if (event['type'] == 'loading') {
+      setState(() => _loadingChapter = true);
+    }
+    if (event['type'] == 'progress') {
+      setState(() {
+        _loadingChapter = false;
+        _start = event['start'] as int? ?? 0;
+        _end = event['end'] as int? ?? 0;
+      });
+    }
+    if (event['type'] == 'chapter') {
+      final next = event['chapter'] as int? ?? _chapter;
+      setState(() {
+        _loadingChapter = false;
+        _chapter = next;
+        _start = event['start'] as int? ?? 0;
+        _end = event['end'] as int? ?? _start;
+      });
+    }
+    if (event['type'] == 'sleepComplete') {
+      setState(() => _timerLabel = null);
+    }
+    if (event['type'] == 'sleep') {
+      setState(() => _timerLabel = _sleepLabelFromHandler());
+    }
+    if (event['type'] == 'mode') {
+      setState(() {
+        _mode = PlaybackMode.values.byName(event['mode'] as String);
+      });
+    }
+    if (event['type'] == 'error') {
+      setState(() => _loadingChapter = false);
+      final message = event['message']?.toString() ?? '播放失败';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> _initializePlayer() async {
+    if (mounted) {
+      setState(() {
+        _initializing = true;
+        _initializationError = null;
+      });
+    }
+    try {
+      final initialBook = _book;
+      if (initialBook == null) throw StateError('书籍不存在');
       final controller = ref.read(appControllerProvider.notifier);
-      final saved = controller.audioProgressFor(book.id);
-      _chapter = (saved?.chapterIndex ?? book.chapterIndex).clamp(
-        0,
-        book.chapters.length - 1,
+      final saved = controller.audioProgressFor(initialBook.id);
+      final requestedChapter = ttsAudioHandler.currentBookId == initialBook.id
+          ? ttsAudioHandler.currentChapter
+          : (saved?.chapterIndex ?? initialBook.chapterIndex);
+      final book = await controller.prepareBookForTts(
+        initialBook.id,
+        chapterIndex: requestedChapter,
       );
+      if (!mounted) return;
+      _chapter = requestedChapter.clamp(0, book.chapters.length - 1);
       _start = _end =
           saved?.characterOffset.clamp(
             0,
@@ -73,64 +140,38 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       _speed =
           saved?.speed ?? ref.read(appControllerProvider).ttsSettings.speed;
       _mode = saved?.mode ?? PlaybackMode.sequential;
-      ref.read(appControllerProvider.notifier).setActiveAudio(book.id);
-      _playbackSubscription = ttsAudioHandler.playbackState.listen((value) {
-        if (mounted) setState(() => _playing = value.playing);
-      });
-      _eventSubscription = ttsAudioHandler.customEvent.listen((event) {
-        if (!mounted || event is! Map || event['bookId'] != book.id) return;
-        if (event['type'] == 'progress') {
-          setState(() {
-            _start = event['start'] as int? ?? 0;
-            _end = event['end'] as int? ?? 0;
-          });
-        }
-        if (event['type'] == 'chapter') {
-          final next = event['chapter'] as int? ?? _chapter;
-          setState(() {
-            _chapter = next;
-            _start = event['start'] as int? ?? 0;
-            _end = event['end'] as int? ?? _start;
-          });
-        }
-        if (event['type'] == 'sleepComplete') {
-          setState(() => _timerLabel = null);
-        }
-        if (event['type'] == 'sleep') {
-          setState(() => _timerLabel = _sleepLabelFromHandler());
-        }
-        if (event['type'] == 'mode') {
-          setState(() {
-            _mode = PlaybackMode.values.byName(event['mode'] as String);
-          });
-        }
-        if (event['type'] == 'error') {
-          final message = event['message']?.toString() ?? '播放失败';
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(message)));
-        }
-      });
+      controller.setActiveAudio(book.id);
+      final chapterLoader = book.source == BookSource.weread
+          ? (int index) =>
+                controller.prepareBookForTts(book.id, chapterIndex: index)
+          : null;
       if (ttsAudioHandler.currentBookId != book.id) {
         await ttsAudioHandler.loadBook(
           book,
           chapterIndex: _chapter,
           characterOffset: _end,
           mode: _mode,
+          chapterLoader: chapterLoader,
         );
         await ttsAudioHandler.applySettings(
           ref.read(appControllerProvider).ttsSettings.copyWith(speed: _speed),
         );
       } else {
-        setState(() {
-          _chapter = ttsAudioHandler.currentChapter;
-          _start = _end = ttsAudioHandler.characterOffset;
-          _speed = ttsAudioHandler.speed;
-          _mode = ttsAudioHandler.mode;
-          _playing = ttsAudioHandler.playbackState.value.playing;
-        });
+        ttsAudioHandler.setChapterLoader(chapterLoader);
+        _chapter = ttsAudioHandler.currentChapter;
+        _start = _end = ttsAudioHandler.characterOffset;
+        _speed = ttsAudioHandler.speed;
+        _mode = ttsAudioHandler.mode;
+        _playing = ttsAudioHandler.playbackState.value.playing;
       }
-    });
+      if (mounted) setState(() => _initializing = false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _initializing = false;
+        _initializationError = error.toString();
+      });
+    }
   }
 
   @override
@@ -217,6 +258,39 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final book = matches.first;
+    if (_initializing) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF121110),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_initializationError case final message?) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF121110),
+        appBar: AppBar(backgroundColor: const Color(0xFF121110)),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Color(0xFFD8D0BE)),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: _initializePlayer,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重试'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     if (book.chapters.isEmpty) {
       return Scaffold(
         appBar: AppBar(),
@@ -449,16 +523,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         ),
       ),
       IconButton.filled(
-        onPressed: _speak,
+        onPressed: _loadingChapter ? null : _speak,
         style: IconButton.styleFrom(
           backgroundColor: const Color(0xFFEDE7D8),
           foregroundColor: AppColors.ink,
           fixedSize: const Size(66, 66),
         ),
-        icon: Icon(
-          _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          size: 34,
-        ),
+        icon: _loadingChapter
+            ? const SizedBox(
+                width: 25,
+                height: 25,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              )
+            : Icon(
+                _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: 34,
+              ),
       ),
       IconButton(
         tooltip: '前进约 15 秒',

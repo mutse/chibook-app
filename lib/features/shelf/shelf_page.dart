@@ -514,12 +514,11 @@ Future<void> _bookMenu(BuildContext context, WidgetRef ref, Book book) async {
             title: Text(book.isPinned ? '取消置顶' : '置顶'),
             onTap: () => Navigator.pop(context, 'pin'),
           ),
-          if (book.source == BookSource.local)
-            ListTile(
-              leading: const Icon(Icons.headphones_outlined),
-              title: const Text('开始听书'),
-              onTap: () => Navigator.pop(context, 'listen'),
-            ),
+          ListTile(
+            leading: const Icon(Icons.headphones_outlined),
+            title: const Text('开始听书'),
+            onTap: () => Navigator.pop(context, 'listen'),
+          ),
           ListTile(
             leading: const Icon(Icons.delete_outline, color: AppColors.seal),
             title: const Text('从书架删除', style: TextStyle(color: AppColors.seal)),

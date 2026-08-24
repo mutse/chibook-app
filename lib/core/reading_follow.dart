@@ -28,3 +28,23 @@ int? nextReadableChapterIndex(
   }
   return null;
 }
+
+/// TTS 切章。远程章节尚未下载时正文为空，但仍应先进入相邻章节并按需加载；
+/// 本地书籍则继续跳过真正没有文字的 PDF 页面。
+int? nextTtsChapterIndex(
+  List<Chapter> chapters, {
+  required int currentIndex,
+  required int direction,
+  required bool loadOnDemand,
+}) {
+  if (chapters.isEmpty || direction == 0) return null;
+  if (!loadOnDemand) {
+    return nextReadableChapterIndex(
+      chapters,
+      currentIndex: currentIndex,
+      direction: direction,
+    );
+  }
+  final next = currentIndex + direction.sign;
+  return next >= 0 && next < chapters.length ? next : null;
+}

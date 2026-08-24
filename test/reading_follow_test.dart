@@ -71,4 +71,36 @@ void main() {
       );
     });
   });
+
+  group('nextTtsChapterIndex', () {
+    const remoteChapters = [
+      Chapter(title: '第一章', content: '已加载', remoteUid: 1),
+      Chapter(title: '第二章', content: '', remoteUid: 2, isLoaded: false),
+      Chapter(title: '第三章', content: '', remoteUid: 3, isLoaded: false),
+    ];
+
+    test('enters an unloaded remote chapter so TTS can fetch it', () {
+      expect(
+        nextTtsChapterIndex(
+          remoteChapters,
+          currentIndex: 0,
+          direction: 1,
+          loadOnDemand: true,
+        ),
+        1,
+      );
+    });
+
+    test('still respects remote chapter boundaries', () {
+      expect(
+        nextTtsChapterIndex(
+          remoteChapters,
+          currentIndex: 2,
+          direction: 1,
+          loadOnDemand: true,
+        ),
+        isNull,
+      );
+    });
+  });
 }

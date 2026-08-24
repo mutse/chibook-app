@@ -221,22 +221,41 @@ class _ReadingHomePageState extends ConsumerState<ReadingHomePage> {
       }
       return;
     }
-    final saved = state.audioProgress
-        .where((value) => value.bookId == book.id)
-        .firstOrNull;
-    await ttsAudioHandler.loadBook(
-      book,
-      chapterIndex: saved?.chapterIndex ?? chapterIndex,
-      characterOffset: saved?.characterOffset ?? 0,
-      mode: saved?.mode ?? PlaybackMode.sequential,
-    );
-    await ttsAudioHandler.applySettings(
-      state.ttsSettings.copyWith(
-        speed: saved?.speed ?? state.ttsSettings.speed,
-      ),
-    );
-    ref.read(appControllerProvider.notifier).setActiveAudio(book.id);
-    await ttsAudioHandler.play();
+    try {
+      final saved = state.audioProgress
+          .where((value) => value.bookId == book.id)
+          .firstOrNull;
+      final controller = ref.read(appControllerProvider.notifier);
+      final preparedBook = await controller.prepareBookForTts(
+        book.id,
+        chapterIndex: saved?.chapterIndex ?? chapterIndex,
+      );
+      final chapterLoader = preparedBook.source == BookSource.weread
+          ? (int index) => controller.prepareBookForTts(
+              preparedBook.id,
+              chapterIndex: index,
+            )
+          : null;
+      await ttsAudioHandler.loadBook(
+        preparedBook,
+        chapterIndex: saved?.chapterIndex ?? chapterIndex,
+        characterOffset: saved?.characterOffset ?? 0,
+        mode: saved?.mode ?? PlaybackMode.sequential,
+        chapterLoader: chapterLoader,
+      );
+      await ttsAudioHandler.applySettings(
+        state.ttsSettings.copyWith(
+          speed: saved?.speed ?? state.ttsSettings.speed,
+        ),
+      );
+      controller.setActiveAudio(book.id);
+      await ttsAudioHandler.play();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _openHighlight(Highlight highlight, List<Book> books) async {

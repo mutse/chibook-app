@@ -11,6 +11,8 @@ import 'cloud_tts_service.dart';
 
 late final TtsAudioHandler ttsAudioHandler;
 
+typedef TtsChapterLoader = Future<Book> Function(int chapterIndex);
+
 Future<void> initializeAudioService() async {
   ttsAudioHandler = await AudioService.init<TtsAudioHandler>(
     builder: TtsAudioHandler.new,
@@ -44,6 +46,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   bool _handlingCloudCompletion = false;
   Timer? _sleepTimer;
   DateTime? _sleepDeadline;
+  TtsChapterLoader? _chapterLoader;
   bool _interruptedByFocus = false;
   StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
   StreamSubscription<void>? _noisySubscription;
@@ -164,6 +167,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     required int chapterIndex,
     int characterOffset = 0,
     PlaybackMode mode = PlaybackMode.sequential,
+    TtsChapterLoader? chapterLoader,
   }) async {
     _operation++;
     await _stopEngines();
@@ -174,6 +178,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       book.chapters[_chapter].content.length,
     );
     _mode = mode;
+    _chapterLoader = chapterLoader;
     _activeChunk = null;
     _publishMediaItem();
     _publish(playing: false, state: AudioProcessingState.ready);
@@ -282,6 +287,10 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     _publishPosition(type: 'mode');
   }
 
+  void setChapterLoader(TtsChapterLoader? loader) {
+    _chapterLoader = loader;
+  }
+
   @override
   Future<void> play() => _speakCurrent();
 
@@ -326,6 +335,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     _chapter = 0;
     _characterOffset = 0;
     _activeChunk = null;
+    _chapterLoader = null;
     mediaItem.add(null);
   }
 
@@ -384,11 +394,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> _moveChapter(int delta) async {
     final book = _book;
     if (book == null || book.chapters.isEmpty) return;
-    final nextChapter = nextReadableChapterIndex(
-      book.chapters,
-      currentIndex: _chapter,
-      direction: delta,
-    );
+    final nextChapter = _nextChapterIndex(delta);
     if (nextChapter == null) return;
     _operation++;
     await _stopEngines();
@@ -401,21 +407,14 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> _speakCurrent() async {
+    if (!await _ensureCurrentChapterLoaded()) return;
     final book = _book;
     if (book == null || book.chapters.isEmpty) return;
     final content = book.chapters[_chapter].content;
     if (content.trim().isEmpty) {
       final nextChapter = switch (_mode) {
-        PlaybackMode.sequential => nextReadableChapterIndex(
-          book.chapters,
-          currentIndex: _chapter,
-          direction: 1,
-        ),
-        PlaybackMode.reverse => nextReadableChapterIndex(
-          book.chapters,
-          currentIndex: _chapter,
-          direction: -1,
-        ),
+        PlaybackMode.sequential => _nextChapterIndex(1),
+        PlaybackMode.reverse => _nextChapterIndex(-1),
         PlaybackMode.repeatOne => null,
       };
       if (nextChapter != null) {
@@ -542,16 +541,8 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       return;
     }
     final nextChapter = switch (_mode) {
-      PlaybackMode.sequential => nextReadableChapterIndex(
-        book?.chapters ?? const [],
-        currentIndex: _chapter,
-        direction: 1,
-      ),
-      PlaybackMode.reverse => nextReadableChapterIndex(
-        book?.chapters ?? const [],
-        currentIndex: _chapter,
-        direction: -1,
-      ),
+      PlaybackMode.sequential => _nextChapterIndex(1),
+      PlaybackMode.reverse => _nextChapterIndex(-1),
       PlaybackMode.repeatOne => _chapter,
     };
     if (book != null && nextChapter != null) {
@@ -563,6 +554,47 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       await _speakCurrent();
     } else {
       _publish(playing: false, state: AudioProcessingState.completed);
+    }
+  }
+
+  int? _nextChapterIndex(int direction) {
+    final book = _book;
+    if (book == null || book.chapters.isEmpty) return null;
+    return nextTtsChapterIndex(
+      book.chapters,
+      currentIndex: _chapter,
+      direction: direction,
+      loadOnDemand: _chapterLoader != null,
+    );
+  }
+
+  Future<bool> _ensureCurrentChapterLoaded() async {
+    final book = _book;
+    if (book == null || book.chapters.isEmpty) return false;
+    final chapter = book.chapters[_chapter];
+    final loader = _chapterLoader;
+    if (chapter.isLoaded || loader == null) return true;
+
+    final token = ++_operation;
+    _publish(playing: false, state: AudioProcessingState.loading);
+    customEvent.add({
+      'type': 'loading',
+      'bookId': book.id,
+      'chapter': _chapter,
+    });
+    try {
+      final updated = await loader(_chapter);
+      if (token != _operation || _book?.id != book.id) return false;
+      if (_chapter >= updated.chapters.length) {
+        _reportError('微信读书章节目录已发生变化，请重新打开听书页面');
+        return false;
+      }
+      _book = updated;
+      _publishMediaItem();
+      return true;
+    } catch (error) {
+      if (token == _operation) _reportError(error.toString());
+      return false;
     }
   }
 

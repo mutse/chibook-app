@@ -342,21 +342,20 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
               onSettings: _showSettings,
               showContents: !form.hasSidebar,
             ),
-            if (widget.book.source == BookSource.local)
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 240),
-                right: 16,
-                bottom: _chrome ? 104 : 30,
-                child: FloatingActionButton.extended(
-                  heroTag: 'listen-${widget.book.id}',
-                  onPressed: () =>
-                      context.push('/player/${widget.book.id}?from=reader'),
-                  backgroundColor: AppColors.bamboo,
-                  foregroundColor: Colors.white,
-                  icon: const Icon(Icons.play_arrow_rounded, size: 19),
-                  label: const Text('听书'),
-                ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 240),
+              right: 16,
+              bottom: _chrome ? 104 : 30,
+              child: FloatingActionButton.extended(
+                heroTag: 'listen-${widget.book.id}',
+                onPressed: () =>
+                    context.push('/player/${widget.book.id}?from=reader'),
+                backgroundColor: AppColors.bamboo,
+                foregroundColor: Colors.white,
+                icon: const Icon(Icons.play_arrow_rounded, size: 19),
+                label: const Text('听书'),
               ),
+            ),
             if (_playing && _spokenChapter != null)
               Positioned(
                 top: MediaQuery.paddingOf(context).top + 10,
@@ -398,40 +397,64 @@ class _ReflowReaderPageState extends ConsumerState<ReflowReaderPage> {
   /// 与播放页共用同一 [ttsAudioHandler] 和同一份「章节 + 字符偏移」位置，
   /// 不新建播放通道；本书未加载时按已保存的听书进度补齐倍速与模式。
   Future<void> _speakFrom(int chapterIndex, int offset) async {
-    final book = widget.book;
-    if (book.chapters.isEmpty) return;
-    final controller = ref.read(appControllerProvider.notifier);
-    final ttsSettings = ref.read(appControllerProvider).ttsSettings;
-    final clampedChapter = chapterIndex.clamp(0, book.chapters.length - 1);
-    final clampedOffset = offset.clamp(
-      0,
-      book.chapters[clampedChapter].content.length,
-    );
-    // 明确的播放意图：清除手动翻页的让位窗口，立即恢复自动跟随。
-    _followHoldUntil = null;
-    controller.setActiveAudio(book.id);
-    if (ttsAudioHandler.currentBookId != book.id) {
-      final saved = controller.audioProgressFor(book.id);
-      await ttsAudioHandler.loadBook(
-        book,
-        chapterIndex: clampedChapter,
-        characterOffset: clampedOffset,
-        mode: saved?.mode ?? PlaybackMode.sequential,
+    try {
+      if (widget.book.chapters.isEmpty) return;
+      final controller = ref.read(appControllerProvider.notifier);
+      final ttsSettings = ref.read(appControllerProvider).ttsSettings;
+      final requestedChapter = chapterIndex.clamp(
+        0,
+        widget.book.chapters.length - 1,
       );
-      await ttsAudioHandler.applySettings(
-        ttsSettings.copyWith(speed: saved?.speed ?? ttsSettings.speed),
+      final book = await controller.prepareBookForTts(
+        widget.book.id,
+        chapterIndex: requestedChapter,
       );
-      await ttsAudioHandler.play();
-    } else if (ttsAudioHandler.currentChapter != clampedChapter) {
-      await ttsAudioHandler.loadBook(
-        book,
-        chapterIndex: clampedChapter,
-        characterOffset: clampedOffset,
-        mode: ttsAudioHandler.mode,
+      final clampedChapter = requestedChapter.clamp(
+        0,
+        book.chapters.length - 1,
       );
-      await ttsAudioHandler.play();
-    } else {
-      await ttsAudioHandler.seekToCharacter(clampedOffset);
+      final clampedOffset = offset.clamp(
+        0,
+        book.chapters[clampedChapter].content.length,
+      );
+      final chapterLoader = book.source == BookSource.weread
+          ? (int index) =>
+                controller.prepareBookForTts(book.id, chapterIndex: index)
+          : null;
+      // 明确的播放意图：清除手动翻页的让位窗口，立即恢复自动跟随。
+      _followHoldUntil = null;
+      controller.setActiveAudio(book.id);
+      if (ttsAudioHandler.currentBookId != book.id) {
+        final saved = controller.audioProgressFor(book.id);
+        await ttsAudioHandler.loadBook(
+          book,
+          chapterIndex: clampedChapter,
+          characterOffset: clampedOffset,
+          mode: saved?.mode ?? PlaybackMode.sequential,
+          chapterLoader: chapterLoader,
+        );
+        await ttsAudioHandler.applySettings(
+          ttsSettings.copyWith(speed: saved?.speed ?? ttsSettings.speed),
+        );
+        await ttsAudioHandler.play();
+      } else if (ttsAudioHandler.currentChapter != clampedChapter) {
+        await ttsAudioHandler.loadBook(
+          book,
+          chapterIndex: clampedChapter,
+          characterOffset: clampedOffset,
+          mode: ttsAudioHandler.mode,
+          chapterLoader: chapterLoader,
+        );
+        await ttsAudioHandler.play();
+      } else {
+        ttsAudioHandler.setChapterLoader(chapterLoader);
+        await ttsAudioHandler.seekToCharacter(clampedOffset);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 

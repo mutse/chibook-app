@@ -324,6 +324,30 @@ class AppController extends Notifier<AppState> {
     );
   }
 
+  Future<Book> prepareBookForTts(String id, {required int chapterIndex}) async {
+    var book = state.books.where((value) => value.id == id).firstOrNull;
+    if (book == null) throw StateError('书籍不存在');
+    if (book.source == BookSource.weread) {
+      if (book.chapters.isEmpty) {
+        await prepareWeReadBook(id);
+        book = state.books.where((value) => value.id == id).firstOrNull;
+      }
+      if (book == null || book.chapters.isEmpty) {
+        throw const WeReadException('这本书暂时没有可朗读的文字章节');
+      }
+      final target = chapterIndex.clamp(0, book.chapters.length - 1);
+      await loadWeReadChapter(id, target);
+      book = state.books.where((value) => value.id == id).firstOrNull;
+      if (book == null || !book.chapters[target].isLoaded) {
+        throw const WeReadException('微信读书章节加载失败，请稍后重试');
+      }
+    }
+    if (book.chapters.isEmpty) {
+      throw StateError('此书暂无可用于 TTS 的文本');
+    }
+    return book;
+  }
+
   Future<void> logoutWeRead() async {
     await _weRead.logout();
     final removedIds = state.books
