@@ -38,7 +38,7 @@ PDF 使用开源 `pdfrx`/PDFium，与 TXT/EPUB 阅读器完全分离。PDF 是�
 
 ### TTS 同步
 
-系统语音逐词高亮使用 `flutter_tts` 的 progress callback。OpenAI 云端语音与微软在线神经语音都使用分段 MP3 的播放位置映射字符范围，并通过 `just_audio` 播放本地缓存；微软免密选项使用 Edge Read Aloud 兼容接口，不是需要资源密钥的正式 Azure Speech API，也不具备 Azure SLA。所有模式都由 `audio_service` 统一管理；播放器、迷你播放器与系统媒体控件共享同一状态。云端语音为 AI 合成音频，并非真人录音。
+系统语音按句子边界分段朗读，以兼容 Android `TextToSpeech` 的单次输入长度限制；逐词高亮使用 `flutter_tts` 的 progress callback。OpenAI 云端语音与微软在线神经语音都使用分段 MP3 的播放位置映射字符范围，并通过 `just_audio` 播放本地缓存；微软免密选项使用 Edge Read Aloud 兼容接口，不是需要资源密钥的正式 Azure Speech API，也不具备 Azure SLA。所有模式都由 `audio_service` 统一管理；播放器、迷你播放器与系统媒体控件共享同一状态。云端语音为 AI 合成音频，并非真人录音。
 
 ## 运行
 

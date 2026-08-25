@@ -71,7 +71,7 @@ Imports copy the picked file into `<appDocuments>/library/<uuid>.<ext>` and pars
 ### TTS: local and cloud engines, one position model
 
 `TtsAudioHandler` drives either engine and keeps identical character-offset semantics:
-- **builtin** — `flutter_tts`, speaks `content.substring(_characterOffset)`; `setProgressHandler` offsets are relative, so they're rebased onto `_speechStartOffset`.
+- **builtin** — `flutter_tts`, speaks from `_characterOffset` in sentence-aware chunks of at most 3000 UTF-16 code units so Android stays below `TextToSpeech.getMaxSpeechInputLength()`; `setProgressHandler` offsets are relative to the active chunk, so they're rebased onto `_speechStartOffset`.
 - **openai** — `CloudTtsService` (`lib/services/cloud_tts_service.dart`) splits a chapter into ~1200-char `TextChunk`s on sentence boundaries, POSTs `/v1/audio/speech` (`gpt-4o-mini-tts`), caches the MP3 under `<appSupport>/tts_cache/<bookId>/<chapter>/<voice>_<sha256>.mp3`, and plays it with `just_audio`. Playback position is mapped back to a character offset by `position/duration` ratio across the chunk.
 - **azure enum / keyless Microsoft voice** — implemented through the Microsoft Edge Read Aloud compatible WebSocket via `edge_tts`; this is not the official Azure Speech API (which requires a resource key or bearer token) and has no Azure SLA. It reuses the same MP3 cache, `just_audio`, cancellation token, and character-position mapping as OpenAI.
 

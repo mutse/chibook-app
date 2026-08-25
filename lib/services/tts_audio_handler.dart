@@ -13,6 +13,11 @@ late final TtsAudioHandler ttsAudioHandler;
 
 typedef TtsChapterLoader = Future<Book> Function(int chapterIndex);
 
+// Android TextToSpeech rejects a single utterance longer than its framework
+// limit (normally 4000 UTF-16 code units) with ERROR_INVALID_REQUEST (-8).
+// Leave headroom for vendor engines, some of which enforce a smaller limit.
+const _builtinTtsChunkCharacters = 3000;
+
 Future<void> initializeAudioService() async {
   ttsAudioHandler = await AudioService.init<TtsAudioHandler>(
     builder: TtsAudioHandler.new,
@@ -42,6 +47,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   PlaybackMode _mode = PlaybackMode.sequential;
   TtsSettings _settings = const TtsSettings();
   TextChunk? _activeChunk;
+  int? _activeBuiltinChunkEnd;
   int _operation = 0;
   bool _handlingCloudCompletion = false;
   Timer? _sleepTimer;
@@ -83,7 +89,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       _characterOffset = absoluteEnd;
       _emitPosition(start: absoluteStart, end: absoluteEnd);
     });
-    _tts.setCompletionHandler(_completeChapter);
+    _tts.setCompletionHandler(_completeBuiltinChunk);
 
     _cloudPlayer.positionStream.listen(_handleCloudPosition);
     _cloudPlayer.processingStateStream.listen((state) {
@@ -180,6 +186,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     _mode = mode;
     _chapterLoader = chapterLoader;
     _activeChunk = null;
+    _activeBuiltinChunkEnd = null;
     _publishMediaItem();
     _publish(playing: false, state: AudioProcessingState.ready);
     _publishPosition(type: 'chapter');
@@ -191,7 +198,8 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     await _tts.setSpeechRate((_speed * .5).clamp(.1, 1.0));
     await _cloudPlayer.setSpeed(_speed);
     if (playbackState.value.playing && !isCloud) {
-      await _tts.stop();
+      _operation++;
+      await _stopEngines();
       await _speakCurrent();
     } else {
       _publishPosition(type: 'progress');
@@ -212,6 +220,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       _operation++;
       await _stopEngines();
       _activeChunk = null;
+      _activeBuiltinChunkEnd = null;
     }
     if (settings.provider == TtsProvider.builtin) {
       final voiceParts = settings.systemVoiceId?.split('|');
@@ -308,6 +317,10 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       }
       await _cloudPlayer.pause();
     } else {
+      // Also invalidates a next-chunk _speakCurrent that may currently be
+      // awaiting setSpeechRate between two Android utterances.
+      _operation++;
+      _activeBuiltinChunkEnd = null;
       await _tts.pause();
     }
     _publish(playing: false);
@@ -325,6 +338,9 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> _stopEngines() async {
+    // Clear this before stop: an engine being stopped must never make a delayed
+    // completion callback advance the new utterance/chapter.
+    _activeBuiltinChunkEnd = null;
     await Future.wait([_tts.stop(), _cloudPlayer.stop()]);
   }
 
@@ -335,6 +351,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     _chapter = 0;
     _characterOffset = 0;
     _activeChunk = null;
+    _activeBuiltinChunkEnd = null;
     _chapterLoader = null;
     mediaItem.add(null);
   }
@@ -434,6 +451,10 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
         _settings.provider == TtsProvider.azure) {
       await _playCloudChunk();
     } else if (_settings.provider == TtsProvider.builtin) {
+      // Ignore duplicate play commands while the current utterance is active.
+      // Otherwise its completion could be mistaken for a newly assigned chunk
+      // and skip unread text.
+      if (_activeBuiltinChunkEnd != null && playbackState.value.playing) return;
       // builtin 路径同样需要 token 校验：setSpeechRate 之后若有新的
       // seek/切章/中断恢复抢先执行，这次 speak 必须放弃，否则会复活旧位置。
       final token = ++_operation;
@@ -441,7 +462,14 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       if (token != _operation) return;
       _publish(playing: true, state: AudioProcessingState.ready);
       _speechStartOffset = _characterOffset;
-      await _tts.speak(content.substring(_characterOffset));
+      final chunk = _cloudTts
+          .splitText(
+            content.substring(_characterOffset),
+            maxCharacters: _builtinTtsChunkCharacters,
+          )
+          .first;
+      _activeBuiltinChunkEnd = _characterOffset + chunk.end;
+      await _tts.speak(chunk.text);
     } else {
       _reportError('当前云端服务尚未接入，请选择 OpenAI 或系统语音');
     }
@@ -527,6 +555,25 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
+  Future<void> _completeBuiltinChunk() async {
+    if (isCloud) return;
+    final completedEnd = _activeBuiltinChunkEnd;
+    final content = _book?.chapters[_chapter].content;
+    if (completedEnd == null || content == null) return;
+
+    _activeBuiltinChunkEnd = null;
+    _characterOffset = completedEnd.clamp(0, content.length);
+    _emitPosition(start: _characterOffset, end: _characterOffset);
+    if (_characterOffset < content.length) {
+      // `awaitSpeakCompletion(true)` keeps _speakCurrent pending until this
+      // callback fires. Start the next utterance without awaiting it, otherwise
+      // its own completion callback would be blocked behind this one.
+      unawaited(_speakCurrent());
+    } else {
+      await _completeChapter();
+    }
+  }
+
   Future<void> _completeChapter() async {
     final book = _book;
     if (_stopAfterCurrentChapter) {
@@ -549,6 +596,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       _chapter = nextChapter;
       _characterOffset = 0;
       _activeChunk = null;
+      _activeBuiltinChunkEnd = null;
       _publishMediaItem();
       _publishPosition(type: 'chapter');
       await _speakCurrent();

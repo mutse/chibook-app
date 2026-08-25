@@ -20,4 +20,14 @@ void main() {
     expect(chunks.first.start, 0);
     expect(chunks.last.end, '第一句。第二句。第三句。'.length);
   });
+
+  test('text chunks never exceed the requested Android-safe limit', () {
+    final service = CloudTtsService();
+    final text = List.filled(7001, '字').join();
+    final chunks = service.splitText(text, maxCharacters: 3000);
+
+    expect(chunks.map((chunk) => chunk.text).join(), text);
+    expect(chunks.every((chunk) => chunk.text.length <= 3000), isTrue);
+    expect(chunks.map((chunk) => chunk.text.length), [3000, 3000, 1001]);
+  });
 }
