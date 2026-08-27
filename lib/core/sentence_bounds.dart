@@ -58,3 +58,49 @@ const Set<String> _closingMarks = {'”', '’', '』', '」', '）', ')', '】'
   }
   return (start: from, end: to);
 }
+
+/// 返回从 [start] 开始、适合作为一次系统 TTS utterance 的句末位置。
+///
+/// Android 的部分厂商 TTS 不实现逐字范围回调。让每次真实 utterance 只包含
+/// 一个句子后，即使没有范围回调，也能在 utterance 开始/结束事件上可靠地做
+/// 句级高亮和跟随。超长无标点文本仍受 [maxCharacters] 限制。
+int nextSentenceChunkEnd(String text, int start, {int maxCharacters = 3000}) {
+  if (maxCharacters <= 0) {
+    throw ArgumentError.value(maxCharacters, 'maxCharacters', '必须大于 0');
+  }
+  final from = start.clamp(0, text.length);
+  if (from >= text.length) return text.length;
+  final limit = (from + maxCharacters).clamp(from, text.length);
+  var hasSpokenContent = false;
+  var end = from;
+  while (end < limit) {
+    final character = text[end];
+    end++;
+    if (_sentenceDelimiters.contains(character)) {
+      // 开头的换行和空白归入下一句，避免生成只含空白的 utterance。
+      if (!hasSpokenContent) continue;
+      while (end < limit &&
+          (_sentenceDelimiters.contains(text[end]) ||
+              _closingMarks.contains(text[end]))) {
+        end++;
+      }
+      return end;
+    }
+    if (!_closingMarks.contains(character) && character.trim().isNotEmpty) {
+      hasSpokenContent = true;
+    }
+  }
+
+  // Dart 字符串索引是 UTF-16 code unit；硬截断时不要拆开 emoji 等代理对。
+  if (end < text.length &&
+      end > from &&
+      _isHighSurrogate(text.codeUnitAt(end - 1)) &&
+      _isLowSurrogate(text.codeUnitAt(end))) {
+    end--;
+  }
+  return end;
+}
+
+bool _isHighSurrogate(int value) => value >= 0xD800 && value <= 0xDBFF;
+
+bool _isLowSurrogate(int value) => value >= 0xDC00 && value <= 0xDFFF;

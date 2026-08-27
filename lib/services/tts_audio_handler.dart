@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
 import '../core/models.dart';
 import '../core/reading_follow.dart';
+import '../core/sentence_bounds.dart';
 import 'cloud_tts_service.dart';
 
 late final TtsAudioHandler ttsAudioHandler;
@@ -48,6 +50,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   TtsSettings _settings = const TtsSettings();
   TextChunk? _activeChunk;
   int? _activeBuiltinChunkEnd;
+  String? _activeBuiltinText;
   int _operation = 0;
   bool _handlingCloudCompletion = false;
   Timer? _sleepTimer;
@@ -79,13 +82,23 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       const [IosTextToSpeechAudioCategoryOptions.duckOthers],
       IosTextToSpeechAudioMode.spokenAudio,
     );
-    _tts.setStartHandler(() => _publish(playing: true));
+    _tts.setStartHandler(_handleBuiltinStart);
     _tts.setPauseHandler(() => _publish(playing: false));
     _tts.setCancelHandler(() => _publish(playing: false));
     _tts.setErrorHandler((message) => _reportError(message));
     _tts.setProgressHandler((text, start, end, word) {
-      final absoluteStart = _speechStartOffset + start;
-      final absoluteEnd = _speechStartOffset + end;
+      if (isCloud || text != _activeBuiltinText) return;
+      final content = _book?.chapters[_chapter].content;
+      if (content == null) return;
+      final absoluteStart = (_speechStartOffset + start).clamp(
+        0,
+        content.length,
+      );
+      final absoluteEnd = (_speechStartOffset + end).clamp(
+        absoluteStart,
+        content.length,
+      );
+      if (absoluteEnd <= absoluteStart) return;
       _characterOffset = absoluteEnd;
       _emitPosition(start: absoluteStart, end: absoluteEnd);
     });
@@ -114,6 +127,26 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     });
     await _configureAudioSession();
     _publish(playing: false);
+  }
+
+  bool get _usesAndroidSentenceChunks =>
+      defaultTargetPlatform == TargetPlatform.android;
+
+  void _handleBuiltinStart() {
+    if (isCloud) return;
+    _publish(playing: true);
+    if (!_usesAndroidSentenceChunks) return;
+    final start = _speechStartOffset;
+    final end = _activeBuiltinChunkEnd;
+    if (end == null || end <= start) return;
+    // 这不是时间估算：当前 Android utterance 本身就是 [start, end)
+    // 这一句，因此即使厂商引擎没有 onRangeStart，也能准确高亮当前句。
+    _emitPosition(start: start, end: end);
+  }
+
+  void _clearBuiltinUtterance() {
+    _activeBuiltinChunkEnd = null;
+    _activeBuiltinText = null;
   }
 
   /// 音频焦点、来电中断与拔耳机。
@@ -186,7 +219,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     _mode = mode;
     _chapterLoader = chapterLoader;
     _activeChunk = null;
-    _activeBuiltinChunkEnd = null;
+    _clearBuiltinUtterance();
     _publishMediaItem();
     _publish(playing: false, state: AudioProcessingState.ready);
     _publishPosition(type: 'chapter');
@@ -220,7 +253,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       _operation++;
       await _stopEngines();
       _activeChunk = null;
-      _activeBuiltinChunkEnd = null;
+      _clearBuiltinUtterance();
     }
     if (settings.provider == TtsProvider.builtin) {
       final voiceParts = settings.systemVoiceId?.split('|');
@@ -320,7 +353,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       // Also invalidates a next-chunk _speakCurrent that may currently be
       // awaiting setSpeechRate between two Android utterances.
       _operation++;
-      _activeBuiltinChunkEnd = null;
+      _clearBuiltinUtterance();
       await _tts.pause();
     }
     _publish(playing: false);
@@ -340,7 +373,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> _stopEngines() async {
     // Clear this before stop: an engine being stopped must never make a delayed
     // completion callback advance the new utterance/chapter.
-    _activeBuiltinChunkEnd = null;
+    _clearBuiltinUtterance();
     await Future.wait([_tts.stop(), _cloudPlayer.stop()]);
   }
 
@@ -351,7 +384,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     _chapter = 0;
     _characterOffset = 0;
     _activeChunk = null;
-    _activeBuiltinChunkEnd = null;
+    _clearBuiltinUtterance();
     _chapterLoader = null;
     mediaItem.add(null);
   }
@@ -462,14 +495,24 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       if (token != _operation) return;
       _publish(playing: true, state: AudioProcessingState.ready);
       _speechStartOffset = _characterOffset;
-      final chunk = _cloudTts
-          .splitText(
-            content.substring(_characterOffset),
-            maxCharacters: _builtinTtsChunkCharacters,
-          )
-          .first;
-      _activeBuiltinChunkEnd = _characterOffset + chunk.end;
-      await _tts.speak(chunk.text);
+      final end = _usesAndroidSentenceChunks
+          ? nextSentenceChunkEnd(
+              content,
+              _characterOffset,
+              maxCharacters: _builtinTtsChunkCharacters,
+            )
+          : _characterOffset +
+                _cloudTts
+                    .splitText(
+                      content.substring(_characterOffset),
+                      maxCharacters: _builtinTtsChunkCharacters,
+                    )
+                    .first
+                    .end;
+      _activeBuiltinChunkEnd = end;
+      final utterance = content.substring(_characterOffset, end);
+      _activeBuiltinText = utterance;
+      await _tts.speak(utterance);
     } else {
       _reportError('当前云端服务尚未接入，请选择 OpenAI 或系统语音');
     }
@@ -561,9 +604,13 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
     final content = _book?.chapters[_chapter].content;
     if (completedEnd == null || content == null) return;
 
-    _activeBuiltinChunkEnd = null;
+    _clearBuiltinUtterance();
     _characterOffset = completedEnd.clamp(0, content.length);
-    _emitPosition(start: _characterOffset, end: _characterOffset);
+    // Android 下一句的 onStart 会立即给出新的真实句子区间；中间不先发
+    // 空区间，避免每个句号处出现一帧高亮闪烁。
+    if (!_usesAndroidSentenceChunks || _characterOffset >= content.length) {
+      _emitPosition(start: _characterOffset, end: _characterOffset);
+    }
     if (_characterOffset < content.length) {
       // `awaitSpeakCompletion(true)` keeps _speakCurrent pending until this
       // callback fires. Start the next utterance without awaiting it, otherwise
@@ -596,7 +643,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
       _chapter = nextChapter;
       _characterOffset = 0;
       _activeChunk = null;
-      _activeBuiltinChunkEnd = null;
+      _clearBuiltinUtterance();
       _publishMediaItem();
       _publishPosition(type: 'chapter');
       await _speakCurrent();
@@ -736,6 +783,7 @@ class TtsAudioHandler extends BaseAudioHandler with SeekHandler {
   /// 释放会话订阅。全局单例正常不会销毁，这里保证测试与热重载不泄漏。
   Future<void> dispose() async {
     _cancelSleepTimer();
+    _clearBuiltinUtterance();
     await _interruptionSubscription?.cancel();
     await _noisySubscription?.cancel();
     await _cloudPlayer.dispose();

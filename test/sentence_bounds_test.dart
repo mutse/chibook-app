@@ -76,4 +76,37 @@ void main() {
       expect(sentenceBoundsFor('', 0, 3), (start: 0, end: 0));
     });
   });
+
+  group('nextSentenceChunkEnd', () {
+    test('uses one complete sentence per Android utterance', () {
+      const text = '第一句。第二句比较长！第三句';
+      final first = nextSentenceChunkEnd(text, 0);
+      final second = nextSentenceChunkEnd(text, first);
+
+      expect(text.substring(0, first), '第一句。');
+      expect(text.substring(first, second), '第二句比较长！');
+      expect(text.substring(second), '第三句');
+    });
+
+    test('keeps leading whitespace with the following spoken sentence', () {
+      const text = '\n\n  正文开始。下一句。';
+      final end = nextSentenceChunkEnd(text, 0);
+      expect(text.substring(0, end), '\n\n  正文开始。');
+    });
+
+    test('caps a sentence without punctuation without splitting emoji', () {
+      const text = '甲甲甲😀乙乙';
+      final end = nextSentenceChunkEnd(text, 0, maxCharacters: 4);
+      expect(end, 3);
+      expect(text.substring(0, end), '甲甲甲');
+      expect(nextSentenceChunkEnd(text, end, maxCharacters: 4), 7);
+    });
+
+    test('rejects a non-positive chunk limit', () {
+      expect(
+        () => nextSentenceChunkEnd('正文', 0, maxCharacters: 0),
+        throwsArgumentError,
+      );
+    });
+  });
 }
