@@ -162,6 +162,12 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     onTap: () => context.push('/settings/weread'),
                   ),
                   _SettingTile(
+                    icon: Icons.cloud_download_outlined,
+                    title: 'Z-Library',
+                    value: state.zLibraryAccount == null ? '未登录' : '已连接',
+                    onTap: () => context.push('/settings/zlibrary'),
+                  ),
+                  _SettingTile(
                     icon: Icons.edit_note,
                     title: '我的笔记与划线',
                     value: state.highlights.isEmpty

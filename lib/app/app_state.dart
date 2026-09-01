@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -5,9 +7,11 @@ import '../core/models.dart';
 import '../data/book_repository.dart';
 import '../services/cloud_tts_service.dart';
 import '../services/weread_service.dart';
+import '../services/zlibrary_service.dart';
 
 final bookRepositoryProvider = Provider((ref) => BookRepository());
 final weReadServiceProvider = Provider((ref) => WeReadService());
+final zLibraryServiceProvider = Provider((ref) => ZLibraryService());
 
 final appControllerProvider = NotifierProvider<AppController, AppState>(
   AppController.new,
@@ -26,6 +30,7 @@ class AppState {
     this.listeningRecords = const [],
     this.recentSearches = const ['沈从文', '人间词话', '鲁迅', '瓦尔登湖'],
     this.weReadAccount,
+    this.zLibraryAccount,
     this.isWeReadSyncing = false,
     this.weReadError,
   });
@@ -41,6 +46,7 @@ class AppState {
   final List<ListeningRecord> listeningRecords;
   final List<String> recentSearches;
   final WeReadAccount? weReadAccount;
+  final ZLibraryAccount? zLibraryAccount;
   final bool isWeReadSyncing;
   final String? weReadError;
 
@@ -58,6 +64,8 @@ class AppState {
     List<String>? recentSearches,
     WeReadAccount? weReadAccount,
     bool clearWeReadAccount = false,
+    ZLibraryAccount? zLibraryAccount,
+    bool clearZLibraryAccount = false,
     bool? isWeReadSyncing,
     String? weReadError,
     bool clearWeReadError = false,
@@ -77,6 +85,9 @@ class AppState {
     weReadAccount: clearWeReadAccount
         ? null
         : (weReadAccount ?? this.weReadAccount),
+    zLibraryAccount: clearZLibraryAccount
+        ? null
+        : (zLibraryAccount ?? this.zLibraryAccount),
     isWeReadSyncing: isWeReadSyncing ?? this.isWeReadSyncing,
     weReadError: clearWeReadError ? null : (weReadError ?? this.weReadError),
   );
@@ -91,6 +102,7 @@ class AppController extends Notifier<AppState> {
   final Map<String, Future<void>> _weReadCatalogLoads = {};
   final Map<String, Future<void>> _weReadChapterLoads = {};
   WeReadService get _weRead => ref.read(weReadServiceProvider);
+  ZLibraryService get _zLibrary => ref.read(zLibraryServiceProvider);
 
   @override
   AppState build() {
@@ -108,6 +120,7 @@ class AppController extends Notifier<AppState> {
         _repository.loadAudioProgress(),
         _repository.loadListeningRecords(),
         _restoreWeReadAccountSafely(),
+        _restoreZLibraryAccountSafely(),
       ]);
       final books = values[0] as List<Book>;
       final bookIds = books.map((book) => book.id).toSet();
@@ -133,6 +146,7 @@ class AppController extends Notifier<AppState> {
         audioProgress: audioProgress,
         listeningRecords: listeningRecords,
         weReadAccount: values[6] as WeReadAccount?,
+        zLibraryAccount: values[7] as ZLibraryAccount?,
         initialized: true,
       );
       // 孤儿记录（书籍已删除）过滤后写回磁盘，否则只在内存生效，下次启动仍会读到。
@@ -155,6 +169,55 @@ class AppController extends Notifier<AppState> {
       return await _weRead.restoreAccount();
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<ZLibraryAccount?> _restoreZLibraryAccountSafely() async {
+    try {
+      return await _zLibrary.restoreAccount();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> loginZLibrary({
+    required String email,
+    required String password,
+  }) async {
+    final account = await _zLibrary.login(email: email, password: password);
+    state = state.copyWith(zLibraryAccount: account);
+  }
+
+  Future<void> logoutZLibrary() async {
+    await _zLibrary.logout();
+    state = state.copyWith(clearZLibraryAccount: true);
+  }
+
+  Future<List<ZLibraryBook>> searchZLibrary(String query) =>
+      _zLibrary.search(query);
+
+  Future<Book> downloadZLibraryBook(ZLibraryBook remoteBook) async {
+    final temporaryPath = await _zLibrary.download(remoteBook);
+    Book? imported;
+    final previousBooks = state.books;
+    try {
+      imported = await _repository.importDownloadedBook(
+        sourcePath: temporaryPath,
+        format: remoteBook.format,
+        title: remoteBook.title,
+        author: remoteBook.author,
+        coverUrl: remoteBook.coverUrl,
+      );
+      state = state.copyWith(books: [imported, ...previousBooks]);
+      await _repository.saveBooks(state.books);
+      return imported;
+    } catch (_) {
+      state = state.copyWith(books: previousBooks);
+      if (imported != null) await _repository.deleteBookFile(imported);
+      rethrow;
+    } finally {
+      final temporary = File(temporaryPath);
+      if (await temporary.exists()) await temporary.delete();
     }
   }
 

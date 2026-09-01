@@ -175,48 +175,86 @@ class BookRepository {
     );
     final sourcePath = result?.files.single.path;
     if (sourcePath == null) return null;
-
-    final source = File(sourcePath);
     final extension = sourcePath.split('.').last.toLowerCase();
-    final documents = await getApplicationDocumentsDirectory();
-    final library = Directory('${documents.path}/library');
-    await library.create(recursive: true);
-    final id = _uuid.v4();
-    final storedPath = '${library.path}/$id.$extension';
-    await source.copy(storedPath);
     final name = result!.files.single.name.replaceFirst(
       RegExp(r'\.[^.]+$'),
       '',
     );
+    return _importFile(
+      sourcePath: sourcePath,
+      format: BookFormat.values.byName(extension),
+      fallbackTitle: name,
+    );
+  }
 
-    if (extension == 'pdf') {
-      final chapters = await _extractPdfText(storedPath);
+  Future<Book> importDownloadedBook({
+    required String sourcePath,
+    required BookFormat format,
+    required String title,
+    required String author,
+    String? coverUrl,
+  }) async {
+    final imported = await _importFile(
+      sourcePath: sourcePath,
+      format: format,
+      fallbackTitle: title,
+    );
+    return imported.copyWith(
+      title: title.trim().isEmpty ? imported.title : title.trim(),
+      author: author.trim().isEmpty ? imported.author : author.trim(),
+      coverUrl: coverUrl,
+    );
+  }
+
+  Future<Book> _importFile({
+    required String sourcePath,
+    required BookFormat format,
+    required String fallbackTitle,
+  }) async {
+    final documents = await getApplicationDocumentsDirectory();
+    final library = Directory('${documents.path}/library');
+    await library.create(recursive: true);
+    final id = _uuid.v4();
+    final storedPath = '${library.path}/$id.${format.name}';
+    final storedFile = File(storedPath);
+    try {
+      await File(sourcePath).copy(storedPath);
+      if (format == BookFormat.pdf) {
+        final chapters = await _extractPdfText(storedPath);
+        return Book(
+          id: id,
+          title: fallbackTitle,
+          author: '本地文档',
+          format: BookFormat.pdf,
+          coverColor: 0xFF6B655C,
+          chapters: chapters,
+          filePath: storedPath,
+        );
+      }
+
+      if (format == BookFormat.epub) {
+        return _readEpub(
+          id: id,
+          path: storedPath,
+          fallbackTitle: fallbackTitle,
+        );
+      }
+
+      final bytes = await storedFile.readAsBytes();
+      final text = _decodeText(bytes);
       return Book(
         id: id,
-        title: name,
+        title: fallbackTitle,
         author: '本地文档',
-        format: BookFormat.pdf,
-        coverColor: 0xFF6B655C,
-        chapters: chapters,
+        format: BookFormat.txt,
+        coverColor: 0xFF3F5B4E,
+        chapters: _splitText(text),
         filePath: storedPath,
       );
+    } catch (_) {
+      if (await storedFile.exists()) await storedFile.delete();
+      rethrow;
     }
-
-    if (extension == 'epub') {
-      return _readEpub(id: id, path: storedPath, fallbackTitle: name);
-    }
-
-    final bytes = await File(storedPath).readAsBytes();
-    final text = _decodeText(bytes);
-    return Book(
-      id: id,
-      title: name,
-      author: '本地文档',
-      format: BookFormat.txt,
-      coverColor: 0xFF3F5B4E,
-      chapters: _splitText(text),
-      filePath: storedPath,
-    );
   }
 
   Future<void> deleteBookFile(Book book) async {

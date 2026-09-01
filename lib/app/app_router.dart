@@ -12,6 +12,7 @@ import '../features/player/player_page.dart';
 import '../features/profile/profile_page.dart';
 import '../features/profile/tts_settings_page.dart';
 import '../features/profile/weread_account_page.dart';
+import '../features/profile/zlibrary_account_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/shelf/shelf_page.dart';
@@ -77,6 +78,11 @@ final appRouter = GoRouter(
       path: '/settings/weread',
       parentNavigatorKey: _rootNavigatorKey,
       builder: (_, _) => const WeReadAccountPage(),
+    ),
+    GoRoute(
+      path: '/settings/zlibrary',
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (_, _) => const ZLibraryAccountPage(),
     ),
   ],
 );
