@@ -47,38 +47,70 @@ class ZLibraryBook {
   final String? coverUrl;
 
   factory ZLibraryBook.fromJson(Map<String, Object?> json) {
-    final extension = (json['extension'] as String? ?? '').toLowerCase();
+    final extension = _text(json['extension']).toLowerCase();
     final format = BookFormat.values
         .where((value) => value.name == extension)
         .firstOrNull;
     if (format == null) {
       throw const FormatException('不支持的电子书格式');
     }
+    final title = _text(json['title']);
+    final author = _text(json['author']);
     return ZLibraryBook(
-      id: '${json['id'] ?? ''}',
-      hash: json['hash'] as String? ?? '',
-      title: json['title'] as String? ?? '未命名书籍',
-      author: json['author'] as String? ?? '未知作者',
+      id: _text(json['id']),
+      hash: _text(json['hash']),
+      title: title.isEmpty ? '未命名书籍' : title,
+      author: author.isEmpty ? '未知作者' : author,
       format: format,
-      year: '${json['year'] ?? ''}',
-      language: json['language'] as String? ?? '',
-      fileSize: json['filesize'] as String? ?? '',
+      year: _text(json['year']),
+      language: _text(json['language']),
+      // The search API sends `filesize` as a byte count and `filesizeString`
+      // as the label the tile shows; never cast either one, the numbers arrive
+      // as JSON ints and a failed cast would drop the whole result.
+      fileSize: _fileSizeLabel(json['filesizeString'], json['filesize']),
       coverUrl: _httpsUrl(json['cover']),
     );
   }
+}
+
+/// Decodes a `/eapi/book/search` payload into the books this app can open.
+///
+/// Entries that are malformed, unidentifiable, or in a format the readers do
+/// not support are skipped rather than failing the whole search.
+List<ZLibraryBook> parseZLibrarySearchResults(Map<String, Object?> payload) {
+  final books = payload['books'];
+  if (books is! List) return const [];
+  return books
+      .whereType<Map>()
+      .map((item) {
+        try {
+          return ZLibraryBook.fromJson(item.cast<String, Object?>());
+        } catch (_) {
+          return null;
+        }
+      })
+      .whereType<ZLibraryBook>()
+      .where((book) => book.id.isNotEmpty && book.hash.isNotEmpty)
+      .toList();
 }
 
 class ZLibraryService {
   ZLibraryService({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
-  static const _domains = ['z-library.ec', 'z-library.sk', '1lib.sk'];
+  static const _domains = [
+    'z-library.ec',
+    'z-library.sk',
+    'zh.z-library.sk',
+    '1lib.sk',
+  ];
   static const _domainKey = 'erdu.zlibrary.domain';
   static const _userIdKey = 'erdu.zlibrary.user_id';
   static const _userKeyKey = 'erdu.zlibrary.user_key';
   static const _nameKey = 'erdu.zlibrary.name';
   static const _emailKey = 'erdu.zlibrary.email';
   static const _uuid = Uuid();
+  static const _maxRedirects = 3;
   static const _userAgent =
       'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36';
@@ -86,6 +118,10 @@ class ZLibraryService {
   final FlutterSecureStorage _storage;
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10);
+
+  /// Challenge cookies handed out by the anti-bot layer, kept per host so a
+  /// mirror's cookie is never replayed to a different one.
+  final Map<String, Map<String, String>> _cookieJar = {};
 
   String? _domain;
   String? _userId;
@@ -184,19 +220,7 @@ class ZLibraryService {
     if (!_isSuccess(payload)) {
       throw ZLibraryException(_errorMessage(payload, fallback: '搜索失败，请稍后重试'));
     }
-    final books = payload['books'] as List<Object?>? ?? const [];
-    return books
-        .whereType<Map>()
-        .map((item) {
-          try {
-            return ZLibraryBook.fromJson(item.cast<String, Object?>());
-          } catch (_) {
-            return null;
-          }
-        })
-        .whereType<ZLibraryBook>()
-        .where((book) => book.id.isNotEmpty && book.hash.isNotEmpty)
-        .toList();
+    return parseZLibrarySearchResults(payload);
   }
 
   Future<String> download(ZLibraryBook book) async {
@@ -235,7 +259,7 @@ class ZLibraryService {
           .timeout(const Duration(seconds: 15));
       // The EAPI returns a signed CDN URL. Do not leak account tokens to that
       // third-party host; the signed URL itself authorizes this transfer.
-      _addHeaders(request, authenticated: false);
+      _addHeaders(request, host: uri.host, authenticated: false);
       request.followRedirects = true;
       request.maxRedirects = 5;
       final response = await request.close().timeout(
@@ -316,7 +340,6 @@ class ZLibraryService {
           method: 'GET',
           path: '/eapi/info/domains',
           authenticated: false,
-          followRedirects: false,
         );
         if (payload.containsKey('domains')) return domain;
       } catch (_) {
@@ -333,30 +356,15 @@ class ZLibraryService {
     Map<String, String>? form,
     List<MapEntry<String, String>>? formEntries,
     bool authenticated = true,
-    bool followRedirects = true,
   }) async {
-    final uri = Uri.https(domain, path);
-    final request = method == 'POST'
-        ? await _client.postUrl(uri).timeout(const Duration(seconds: 10))
-        : await _client.getUrl(uri).timeout(const Duration(seconds: 10));
-    _addHeaders(request, authenticated: authenticated);
-    request.followRedirects = followRedirects;
-    if (method == 'POST') {
-      request.headers.contentType = ContentType(
-        'application',
-        'x-www-form-urlencoded',
-      );
-      final entries = formEntries ?? form?.entries.toList() ?? const [];
-      request.write(
-        entries
-            .map(
-              (entry) =>
-                  '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}',
-            )
-            .join('&'),
-      );
-    }
-    final response = await request.close().timeout(const Duration(seconds: 30));
+    final response = await _send(
+      uri: Uri.https(domain, path),
+      method: method,
+      body: method == 'POST'
+          ? _encodeForm(formEntries ?? form?.entries.toList() ?? const [])
+          : null,
+      authenticated: authenticated,
+    );
     final body = await utf8.decoder.bind(response).join();
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ZLibraryException('服务返回 HTTP ${response.statusCode}');
@@ -368,21 +376,110 @@ class ZLibraryService {
     }
   }
 
-  void _addHeaders(HttpClientRequest request, {required bool authenticated}) {
+  /// Sends one API call, following same-host redirects by hand.
+  ///
+  /// `HttpClient` never auto-follows a redirect for POST and keeps no cookie
+  /// jar, while the anti-bot layer in front of several mirrors answers the
+  /// first call with a 307 back to the same URL plus a cookie that has to be
+  /// replayed. Without both pieces every search against those mirrors fails.
+  Future<HttpClientResponse> _send({
+    required Uri uri,
+    required String method,
+    required String? body,
+    required bool authenticated,
+  }) async {
+    var target = uri;
+    var verb = method;
+    var payload = body;
+    for (var hop = 0; hop <= _maxRedirects; hop++) {
+      final request = verb == 'POST'
+          ? await _client.postUrl(target).timeout(const Duration(seconds: 10))
+          : await _client.getUrl(target).timeout(const Duration(seconds: 10));
+      _addHeaders(request, host: target.host, authenticated: authenticated);
+      request.followRedirects = false;
+      // The anti-bot layer answers before reading the POST body, which leaves
+      // the pooled connection out of sync. `_client` is shared for the whole
+      // session, so reusing that socket would poison every later call to the
+      // host; a fresh connection per request is cheap at this call volume.
+      request.persistentConnection = false;
+      if (verb == 'POST') {
+        request.headers.contentType = ContentType(
+          'application',
+          'x-www-form-urlencoded',
+        );
+        request.write(payload ?? '');
+      }
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      _storeCookies(target.host, response);
+      final next = _redirectTarget(response, target);
+      if (next == null) return response;
+      await response.drain<void>();
+      if (response.statusCode != HttpStatus.temporaryRedirect &&
+          response.statusCode != HttpStatus.permanentRedirect) {
+        verb = 'GET';
+        payload = null;
+      }
+      target = next;
+    }
+    throw const ZLibraryException('服务重定向次数过多');
+  }
+
+  /// Resolves the hop a redirect points at, or null when the response should be
+  /// treated as final. A redirect that leaves the host is refused on purpose:
+  /// the mirrors bounce to one another and the session headers are host scoped,
+  /// so following one would hand the account key to a different server.
+  Uri? _redirectTarget(HttpClientResponse response, Uri from) {
+    if (response.statusCode < 300 || response.statusCode >= 400) return null;
+    final location = response.headers.value(HttpHeaders.locationHeader);
+    if (location == null || location.isEmpty) return null;
+    final target = from.resolve(location);
+    if (target.scheme != 'https' || target.host != from.host) return null;
+    return target;
+  }
+
+  void _storeCookies(String host, HttpClientResponse response) {
+    final headers = response.headers[HttpHeaders.setCookieHeader];
+    if (headers == null) return;
+    // Parsed by hand rather than through `response.cookies`, which rejects the
+    // loosely formatted attributes some mirrors send.
+    final jar = _cookieJar.putIfAbsent(host, () => {});
+    for (final header in headers) {
+      final pair = header.split(';').first;
+      final separator = pair.indexOf('=');
+      if (separator <= 0) continue;
+      final name = pair.substring(0, separator).trim();
+      if (name.isEmpty) continue;
+      jar[name] = pair.substring(separator + 1).trim();
+    }
+  }
+
+  void _addHeaders(
+    HttpClientRequest request, {
+    required String host,
+    required bool authenticated,
+  }) {
     request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
     request.headers.set(
       HttpHeaders.acceptHeader,
       'application/json, text/plain, */*',
     );
-    final cookies = <String>['siteLanguageV2=en'];
+    final cookies = <String, String>{
+      'siteLanguageV2': 'en',
+      ...?_cookieJar[host],
+    };
     if (authenticated) {
       _requireSession();
       request.headers.set('remix-userid', _userId!);
       request.headers.set('remix-userkey', _userKey!);
-      cookies.add('remix_userid=$_userId');
-      cookies.add('remix_userkey=$_userKey');
+      cookies['remix_userid'] = _userId!;
+      cookies['remix_userkey'] = _userKey!;
     }
-    request.headers.set(HttpHeaders.cookieHeader, cookies.join('; '));
+    request.headers.set(
+      HttpHeaders.cookieHeader,
+      cookies.entries.map((entry) => '${entry.key}=${entry.value}').join('; '),
+    );
   }
 
   void _requireSession() {
@@ -394,6 +491,42 @@ class ZLibraryService {
 
 Map<String, Object?> _map(Object? value) =>
     value is Map ? value.cast<String, Object?>() : const {};
+
+/// Reads a JSON scalar as text without casting: the search API types the same
+/// field as a string on one record and a number on the next.
+String _text(Object? value) => switch (value) {
+  String value => value.trim(),
+  num() || bool() => '$value',
+  _ => '',
+};
+
+String _fileSizeLabel(Object? label, Object? bytes) {
+  final text = _text(label);
+  if (text.isNotEmpty) return text;
+  final raw = _text(bytes);
+  if (raw.isEmpty) return '';
+  final size = double.tryParse(raw);
+  // Older payloads carried the readable label in `filesize` itself.
+  if (size == null) return raw;
+  if (size <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var value = size;
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  // Two decimals above bytes, matching the `filesizeString` the API sends for
+  // most results so the two sources render alike in the list.
+  return '${value.toStringAsFixed(unit == 0 ? 0 : 2)} ${units[unit]}';
+}
+
+String _encodeForm(List<MapEntry<String, String>> entries) => entries
+    .map(
+      (entry) =>
+          '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}',
+    )
+    .join('&');
 
 bool _isSuccess(Map<String, Object?> payload) {
   final value = payload['success'];
