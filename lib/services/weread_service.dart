@@ -23,6 +23,13 @@ class WeReadException implements Exception {
   String toString() => message;
 }
 
+/// The Web session key (wr_skey) is no longer accepted by the server.
+/// [WeReadService] renews it through the refresh token first and only
+/// surfaces this to callers when that renewal also fails.
+class WeReadSessionExpiredException extends WeReadException {
+  const WeReadSessionExpiredException() : super('微信读书登录已过期，请退出后重新扫码');
+}
+
 class WeReadOtpRequiredException extends WeReadException {
   const WeReadOtpRequiredException() : super('请输入微信显示的四位验证码');
 }
@@ -170,8 +177,23 @@ class WeReadService {
   final HttpClient Function() _clientFactory;
   final Random _random = Random.secure();
   int _loginGeneration = 0;
+  Future<bool>? _pendingRenewal;
+  DateTime? _lastRenewedAt;
 
-  Future<WeReadAccount?> restoreAccount() => credentials.readAccount();
+  /// The web client keeps wr_skey alive with /web/login/renewal; renewing on
+  /// every chapter turn would only add latency and load, so proactive
+  /// renewals are spaced out. Expiry errors always force a renewal.
+  static const _renewalInterval = Duration(minutes: 30);
+
+  Future<WeReadAccount?> restoreAccount() async {
+    final account = await credentials.readAccount();
+    if (account != null) {
+      // Refresh the short-lived session key on launch so a shelf that was
+      // last opened days ago does not greet the user with a login prompt.
+      unawaited(_tryRenewSession());
+    }
+    return account;
+  }
 
   Future<WeReadLoginSession> startLogin() async {
     final cookies = <String, String>{};
@@ -409,15 +431,21 @@ class WeReadService {
     await renewSession();
     final bookHash = wereadHashId(bookId);
     final chapterHash = wereadHashId(chapterUid);
-    final reader = await _authenticatedRequest(
-      'GET',
-      '/web/reader/${bookHash}k$chapterHash',
+    final readerPath = '/web/reader/${bookHash}k$chapterHash';
+    var psvts = _extractPsvts(
+      (await _authenticatedRequest('GET', readerPath)).body,
     );
-    final psvts = RegExp(
-      r'"psvts"\s*:\s*"([^"\\]+)"',
-    ).firstMatch(reader.body)?.group(1);
-    if (psvts == null || psvts.isEmpty) {
-      throw const WeReadException('无法初始化微信读书阅读会话，请重新登录后再试');
+    if (psvts == null) {
+      // A reader page without psvts is the logged-out shell served for a
+      // stale wr_skey. Renew through wr_rt once before giving up.
+      if (await _tryRenewSession(force: true)) {
+        psvts = _extractPsvts(
+          (await _authenticatedRequest('GET', readerPath)).body,
+        );
+      }
+      if (psvts == null) {
+        throw const WeReadException('无法初始化微信读书阅读会话，请重新登录后再试');
+      }
     }
 
     final preferTxt = format?.toLowerCase() == 'txt';
@@ -507,17 +535,59 @@ class WeReadService {
     return response.body;
   }
 
-  Future<void> renewSession() async {
-    final response = await _authenticatedRequest(
+  /// Best-effort proactive renewal. Never throws: if the session is really
+  /// dead the next authenticated call fails with the expiry error and goes
+  /// through the forced renewal-and-retry path instead.
+  Future<void> renewSession() => _tryRenewSession();
+
+  Future<bool> _tryRenewSession({bool force = false}) {
+    final pending = _pendingRenewal;
+    if (pending != null) return pending;
+    final last = _lastRenewedAt;
+    if (!force &&
+        last != null &&
+        DateTime.now().difference(last) < _renewalInterval) {
+      return Future.value(true);
+    }
+    final future = _renewSessionOnce().catchError((Object _) => false);
+    _pendingRenewal = future;
+    return future.whenComplete(() {
+      if (identical(_pendingRenewal, future)) _pendingRenewal = null;
+    });
+  }
+
+  Future<bool> _renewSessionOnce() async {
+    final cookies = await credentials.readCookies();
+    if (cookies['wr_vid']?.isEmpty ?? true) return false;
+    final response = await _request(
       'POST',
       '/web/login/renewal',
       body: {'rq': '%2Fweb%2Fbook%2Fread', 'ql': false},
+      cookies: cookies,
     );
-    final data = _decodeMap(response.body);
-    if (_asInt(data['succ']) != 1) {
-      _throwForApiError(data);
-      throw const WeReadException('微信读书登录续期失败，请重新登录');
+    final data = response.body.trimLeft().startsWith('{')
+        ? _decodeMap(response.body)
+        : const <String, Object?>{};
+    final code = _asInt(data['errCode'] ?? data['errcode']);
+    if ((code != null && code != 0) || _asInt(data['succ']) == 0) {
+      return false;
     }
+    // Some responses carry the rotated tokens in the JSON body instead of
+    // (or in addition to) Set-Cookie; the browser writes both into cookies.
+    final accessToken = _firstNullableText([
+      data['accessToken'],
+      data['skey'],
+      _unwrapData(data)['accessToken'],
+    ]);
+    final refreshToken = _firstNullableText([
+      data['refreshToken'],
+      _unwrapData(data)['refreshToken'],
+    ]);
+    if (accessToken != null) cookies['wr_skey'] = accessToken;
+    if (refreshToken != null) cookies['wr_rt'] = refreshToken;
+    await credentials.writeCookies(cookies);
+    _lastRenewedAt = DateTime.now();
+    return true;
   }
 
   Book? _bookFromShelfItem(Object? raw) {
@@ -562,20 +632,48 @@ class WeReadService {
     String path, {
     Map<String, Object?>? query,
     Map<String, Object?>? body,
+    bool allowRenewal = true,
   }) async {
     final cookies = await credentials.readCookies();
     if (cookies['wr_vid']?.isEmpty ?? true) {
       throw const WeReadException('请先登录微信读书');
     }
-    final response = await _request(
-      method,
-      path,
-      query: query,
-      body: body,
-      cookies: cookies,
-    );
+    _WeReadResponse response;
+    try {
+      response = await _request(
+        method,
+        path,
+        query: query,
+        body: body,
+        cookies: cookies,
+      );
+      if (_isSessionExpiredBody(response.body)) {
+        throw const WeReadSessionExpiredException();
+      }
+    } on WeReadSessionExpiredException {
+      // wr_skey is short-lived; the Web client silently renews it with wr_rt
+      // and retries. Only a failed renewal means the user must scan again.
+      if (!allowRenewal || !await _tryRenewSession(force: true)) rethrow;
+      return _authenticatedRequest(
+        method,
+        path,
+        query: query,
+        body: body,
+        allowRenewal: false,
+      );
+    }
     await credentials.writeCookies(cookies);
     return response;
+  }
+
+  static bool _isSessionExpiredBody(String body) {
+    if (!body.trimLeft().startsWith('{')) return false;
+    try {
+      final data = (jsonDecode(body) as Map).cast<String, Object?>();
+      return _isSessionExpiredCode(_asInt(data['errCode'] ?? data['errcode']));
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<_WeReadResponse> _request(
@@ -619,12 +717,26 @@ class WeReadService {
           .join()
           .timeout(timeout);
       for (final cookie in response.cookies) {
+        // A deletion cookie (empty value / already expired) must not wipe a
+        // token we still need for renewal, e.g. wr_rt.
+        if (_isCookieDeletion(cookie)) continue;
         jar[cookie.name] = cookie.value;
       }
       if (auth && cookies == null && jar.isNotEmpty) {
         await credentials.writeCookies(jar);
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (responseBody.trimLeft().startsWith('{')) {
+          try {
+            _throwForApiError(_decodeMap(responseBody));
+          } on WeReadException catch (error) {
+            if (error is WeReadSessionExpiredException) rethrow;
+            // Fall through to the generic HTTP error below for other codes.
+          }
+        }
+        if (response.statusCode == HttpStatus.unauthorized) {
+          throw const WeReadSessionExpiredException();
+        }
         throw WeReadException('微信读书请求失败（${response.statusCode}）');
       }
       return _WeReadResponse(responseBody);
@@ -642,10 +754,25 @@ class WeReadService {
   }
 }
 
+String? _extractPsvts(String html) {
+  final value = RegExp(r'"psvts"\s*:\s*"([^"\\]+)"').firstMatch(html)?.group(1);
+  return value == null || value.isEmpty ? null : value;
+}
+
 class _WeReadResponse {
   const _WeReadResponse(this.body);
   final String body;
 }
+
+bool _isCookieDeletion(Cookie cookie) {
+  if (cookie.value.isEmpty) return true;
+  final maxAge = cookie.maxAge;
+  if (maxAge != null && maxAge <= 0) return true;
+  final expires = cookie.expires;
+  return expires != null && expires.isBefore(DateTime.now());
+}
+
+bool _isSessionExpiredCode(int? code) => code == -2012 || code == -2010;
 
 WeReadLoginPoll parseWeReadLoginPoll(Map<String, Object?> root) {
   var payload = root;
@@ -875,8 +1002,8 @@ void _throwForApiError(Map<String, Object?> data) {
     data['errMsg'],
     data['errmsg'],
   ], fallback: '请求失败');
-  if (code == -2012 || code == -2010) {
-    throw const WeReadException('微信读书登录已过期，请退出后重新扫码');
+  if (_isSessionExpiredCode(code)) {
+    throw const WeReadSessionExpiredException();
   }
   throw WeReadException('微信读书：$message（$code）');
 }
